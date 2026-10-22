@@ -7,8 +7,8 @@ import jwt
 import pytest
 
 from app import create_app
-from app.errors import Forbidden
-from app.services import update_grade
+from app.api.errors import Forbidden
+from app.api.services import update_grade
 
 SECRET = "test-secret-for-local-pytest-only-0123456789abcdef"
 PASSWORD = "Lms@2026"
@@ -549,3 +549,52 @@ def test_error_checking_order(client):
         404,
         "NOT_FOUND",
     )
+
+
+@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+def test_optional_extensions_work_with_store_backends(tmp_path, backend):
+    config = {
+        "TESTING": True,
+        "JWT_SECRET": SECRET,
+        "AUDIT_LOG_PATH": str(tmp_path / f"{backend}.log"),
+        "ENABLE_EXTENSIONS": True,
+        "RESET_TOKEN_ECHO": True,
+        "BCRYPT_ROUNDS": 4,
+        "LMS_STORE": backend,
+        "SQLITE_PATH": str(tmp_path / f"{backend}.sqlite3"),
+    }
+    test_app = create_app(config)
+    client = test_app.test_client()
+
+    assert client.get("/").status_code == 200
+    assert client.get("/account").status_code == 200
+
+    teacher_token = token_for(client, "an.gv@lms.test")
+    grade = client.put(
+        "/courses/c1/grades/u4",
+        json={"score": 9},
+        headers=headers(teacher_token),
+    )
+    assert grade.status_code == 200
+
+    registration = client.post(
+        "/auth/register",
+        json={"email": "new@lms.test", "password": "ValidPass123"},
+    )
+    assert registration.status_code == 201
+
+    forgot = client.post(
+        "/auth/forgot-password",
+        json={"email": "new@lms.test"},
+    )
+    assert forgot.status_code == 202
+    reset_token = forgot.get_json()["resetToken"]
+
+    reset = client.post(
+        "/auth/reset-password",
+        json={"token": reset_token, "password": "ChangedPass123"},
+    )
+    assert reset.status_code == 200
+
+    new_login = login(client, "new@lms.test", "ChangedPass123")
+    assert new_login.status_code == 200

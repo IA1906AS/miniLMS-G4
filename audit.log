@@ -1,0 +1,4 @@
+{"ts": "2026-10-22T07:00:34.974223+00:00", "actorId": "u2", "action": "UPDATE_GRADE", "resource": "/courses/c1/grades/u4", "result": "SUCCESS", "oldScore": 7.5, "newScore": 9}
+{"ts": "2026-10-22T07:00:52.028104+00:00", "actorId": "u2", "action": "UPDATE_GRADE", "resource": "/courses/c1/grades/u4", "result": "SUCCESS", "oldScore": 7.5, "newScore": 9}
+{"ts": "2026-10-22T07:01:08.730545+00:00", "actorId": "u2", "action": "UPDATE_GRADE", "resource": "/courses/c1/grades/u4", "result": "SUCCESS", "oldScore": 7.5, "newScore": 9}
+{"ts": "2026-10-22T07:01:08.758322+00:00", "actorId": "u106", "action": "RESET_PASSWORD", "resource": "users/u106/password", "result": "SUCCESS"}

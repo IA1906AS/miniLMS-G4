@@ -1,7 +1,7 @@
 from flask import g, jsonify, request
 from werkzeug.exceptions import HTTPException
 
-from app.audit import write_audit
+from app.api.audit import write_audit
 
 # ==========================================
 # 1. DINH NGHIA CAC LOAI LOI

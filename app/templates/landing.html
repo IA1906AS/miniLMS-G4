@@ -1,0 +1,55 @@
+
+{% extends "base.html" %}
+
+{% block title %}Trang chủ{% endblock %}
+
+{% block content %}
+<section class="card">
+    <div class="home-layout">
+        <div>
+            <p class="sub">LEARNING MANAGEMENT SYSTEM</p>
+
+            <h1>Chào mừng đến với miniLMS</h1>
+
+            <p class="sub">
+                Nền tảng quản lý học tập giúp bạn truy cập tài khoản,
+                theo dõi khóa học và xem kết quả học tập một cách thuận tiện.
+            </p>
+
+            <div class="home-actions">
+                <a href="{{ url_for('pages.login_page') }}" class="btn-link">
+                    Đăng nhập
+                </a>
+
+                <a href="{{ url_for('pages.register_page') }}" class="btn-link ghost">
+                    Tạo tài khoản
+                </a>
+            </div>
+        </div>
+    </div>
+</section>
+
+<section class="home-layout">
+    <div class="card">
+        <h2>Quản lý học tập</h2>
+        <p class="sub">
+            Truy cập thông tin tài khoản và các khóa học của bạn.
+        </p>
+    </div>
+
+    <div class="card">
+        <h2>Theo dõi điểm số</h2>
+        <p class="sub">
+            Xem kết quả học tập theo quyền truy cập được cấp.
+        </p>
+    </div>
+
+    <div class="card">
+        <h2>Tài khoản cá nhân</h2>
+        <p class="sub">
+            Đăng nhập an toàn để sử dụng các chức năng của miniLMS.
+        </p>
+    </div>
+</section>
+{% endblock %}
+```

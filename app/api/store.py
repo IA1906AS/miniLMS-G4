@@ -1,10 +1,46 @@
 import json
+from dataclasses import dataclass
 from pathlib import Path
 
 import bcrypt
 
-BASE_DIR = Path(__file__).resolve().parent.parent
+BASE_DIR = Path(__file__).resolve().parent.parent.parent
 SEED_PATH = BASE_DIR / "seed.json"
+
+
+@dataclass
+class User:
+    id: str
+    email: str
+    role: str
+    password_hash: str
+
+
+@dataclass
+class Course:
+    id: str
+    title: str
+    instructor_id: str
+
+
+@dataclass
+class Enrollment:
+    course_id: str
+    student_id: str
+    score: float
+
+
+@dataclass
+class LoginAttempt:
+    failures: int = 0
+    locked_until: float = 0
+
+
+@dataclass
+class ResetToken:
+    token: str
+    user_id: str
+    expires_at: float
 
 
 def load_seed():

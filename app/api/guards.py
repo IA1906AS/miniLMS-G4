@@ -2,7 +2,7 @@ from functools import wraps
 
 from flask import current_app, g
 
-from app.errors import (
+from app.api.errors import (
     Forbidden,
     NotFound,
     Unauthenticated,
@@ -25,8 +25,14 @@ def require_role(*roles):
             # Kiem tra mon hoc ton tai truoc
             course_id = kwargs.get("course_id")
 
-            if course_id is not None and course_id not in store["courses"]:
-                raise NotFound()
+            if course_id is not None:
+                course_exists = (
+                    course_id in store["courses"]
+                    if isinstance(store, dict)
+                    else store.get_course(course_id) is not None
+                )
+                if not course_exists:
+                    raise NotFound()
 
             # Kiem tra vai tro nguoi dung
             if actor["role"] not in roles:

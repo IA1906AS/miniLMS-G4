@@ -10,7 +10,7 @@ from flask import (
     request,
 )
 
-from app.errors import (
+from app.api.errors import (
     AccountLocked,
     InvalidCredentials,
     Unauthenticated,
@@ -23,13 +23,20 @@ MAX_FAILED_ATTEMPTS = 5
 LOCK_DURATION = 15 * 60
 
 
+def hash_password(password, *, rounds=12):
+    return bcrypt.hashpw(
+        password.encode("utf-8"), bcrypt.gensalt(rounds=rounds)
+    ).decode("utf-8")
+
+
 def create_token(user):
     now = int(datetime.now(UTC).timestamp())
 
     ttl = int(current_app.config["TOKEN_TTL_SECONDS"])
+    user_id = user["id"] if isinstance(user, dict) else user.id
 
     payload = {
-        "sub": user["id"],
+        "sub": user_id,
         "iat": now,
         "exp": now + ttl,
     }
@@ -98,35 +105,44 @@ def login():
 
     store = current_app.extensions["lms_store"]
 
-    # Lay bo dem dang nhap that bai
-    failed_logins = store["failed_logins"]
-
-    state = failed_logins.setdefault(
-        email,
-        {
-            "count": 0,
-            "locked_until": 0,
-        },
-    )
-
     now = time.time()
 
+    if isinstance(store, dict):
+        state = store["failed_logins"].setdefault(
+            email,
+            {"count": 0, "locked_until": 0},
+        )
+        failures = state["count"]
+        locked_until = state["locked_until"]
+    else:
+        attempt = store.get_attempt(email)
+        failures = attempt.failures
+        locked_until = attempt.locked_until
+
     # Tai khoan dang bi khoa
-    if state["locked_until"] > now:
+    if locked_until > now:
         raise AccountLocked()
 
     # Het thoi gian khoa thi reset
-    if state["locked_until"] != 0:
-        state["count"] = 0
-        state["locked_until"] = 0
+    if locked_until != 0:
+        failures = 0
+        locked_until = 0
 
-    user_id = store["users_by_email"].get(email)
-    user = store["users"].get(user_id)
+    if isinstance(store, dict):
+        user_id = store["users_by_email"].get(email)
+        user = store["users"].get(user_id)
+        fallback_hash = next(iter(store["users"].values()))["password_hash"]
+    else:
+        user = store.find_user_by_email(email)
+        fallback_hash = store.get_fallback_password_hash()
 
     # Dung hash du phong khi email khong ton tai
-    fallback_hash = next(iter(store["users"].values()))["password_hash"]
-
-    password_hash = user["password_hash"] if user is not None else fallback_hash
+    if user is None:
+        password_hash = fallback_hash
+    else:
+        password_hash = (
+            user["password_hash"] if isinstance(user, dict) else user.password_hash
+        )
 
     try:
         password_ok = bcrypt.checkpw(
@@ -137,16 +153,34 @@ def login():
         password_ok = False
 
     if user is None or not password_ok:
-        state["count"] += 1
+        failures += 1
 
-        if state["count"] >= MAX_FAILED_ATTEMPTS:
-            state["locked_until"] = now + LOCK_DURATION
+        if failures >= MAX_FAILED_ATTEMPTS:
+            locked_until = now + LOCK_DURATION
+            if isinstance(store, dict):
+                state.update(count=failures, locked_until=locked_until)
+            else:
+                from app.api.store import LoginAttempt
+
+                store.save_attempt(email, LoginAttempt(failures, locked_until))
             raise AccountLocked()
+
+        if isinstance(store, dict):
+            state["count"] = failures
+        else:
+            from app.api.store import LoginAttempt
+
+            store.save_attempt(email, LoginAttempt(failures, locked_until))
 
         raise InvalidCredentials()
 
     # Dang nhap dung: reset bo dem
-    failed_logins.pop(email, None)
+    if isinstance(store, dict):
+        store["failed_logins"].pop(email, None)
+    else:
+        from app.api.store import LoginAttempt
+
+        store.save_attempt(email, LoginAttempt())
 
     token = create_token(user)
 

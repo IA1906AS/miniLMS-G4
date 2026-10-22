@@ -1,0 +1,154 @@
+
+{% extends "base.html" %}
+
+{% block title %}Trang tài khoản{% endblock %}
+
+{% block content %}
+<div class="home-layout">
+
+    <!-- Account information -->
+    <section class="card">
+        <h1>Trang tài khoản</h1>
+
+        <p class="sub">
+            Xin chào <strong id="who">…</strong>.
+            Dữ liệu được lấy từ API bằng Bearer token.
+        </p>
+
+        <dl>
+            <dt>Mã người dùng</dt>
+            <dd id="me-id">–</dd>
+
+            <dt>Email</dt>
+            <dd id="me-email">–</dd>
+
+            <dt>Vai trò</dt>
+            <dd id="me-role">–</dd>
+        </dl>
+
+        <div
+            id="account-msg"
+            class="msg"
+            role="status"
+            aria-live="polite"
+        ></div>
+    </section>
+
+    <!-- Grades -->
+    <section class="card">
+        <h2>Điểm các môn</h2>
+
+        <table>
+            <thead>
+                <tr>
+                    <th>Môn</th>
+                    <th>Sinh viên</th>
+                    <th>Điểm</th>
+                </tr>
+            </thead>
+
+            <tbody id="grades"></tbody>
+        </table>
+    </section>
+
+    <!-- Reset password -->
+    <section class="card">
+        <h2>Đặt lại mật khẩu</h2>
+
+        <p class="sub">
+            Nhập email để yêu cầu đặt lại mật khẩu.
+        </p>
+
+        <form id="forgot-form">
+            <label for="reset-email">Email cần đặt lại</label>
+            <input
+                id="reset-email"
+                name="email"
+                type="email"
+                placeholder="email@lms.test"
+                autocomplete="email"
+                required
+            >
+
+            <button type="submit" class="ghost">
+                Gửi yêu cầu
+            </button>
+
+            <div
+                id="forgot-msg"
+                class="msg"
+                role="status"
+                aria-live="polite"
+            ></div>
+        </form>
+
+        <form id="reset-form">
+            <label for="reset-token">Token đặt lại mật khẩu</label>
+            <input
+                id="reset-token"
+                name="token"
+                type="text"
+                placeholder="Dán token vào đây"
+                autocomplete="off"
+                required
+            >
+
+            <label for="reset-new">Mật khẩu mới</label>
+            <input
+                id="reset-new"
+                name="password"
+                type="password"
+                placeholder="Nhập mật khẩu mới"
+                minlength="8"
+                autocomplete="new-password"
+                required
+            >
+
+            <button type="submit">
+                Đổi mật khẩu
+            </button>
+
+            <div
+                id="confirm-msg"
+                class="msg"
+                role="status"
+                aria-live="polite"
+            ></div>
+        </form>
+    </section>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    document.addEventListener("DOMContentLoaded", function () {
+        if (typeof loadAccount === "function") {
+            loadAccount();
+        }
+
+        const forgotFormElement = document.getElementById("forgot-form");
+        const resetFormElement = document.getElementById("reset-form");
+
+        if (forgotFormElement) {
+            forgotFormElement.addEventListener("submit", function (event) {
+                event.preventDefault();
+
+                if (typeof forgotForm === "function") {
+                    forgotForm();
+                }
+            });
+        }
+
+        if (resetFormElement) {
+            resetFormElement.addEventListener("submit", function (event) {
+                event.preventDefault();
+
+                if (typeof resetForm === "function") {
+                    resetForm();
+                }
+            });
+        }
+    });
+</script>
+{% endblock %}
