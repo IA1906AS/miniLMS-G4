@@ -3,10 +3,17 @@
 <html lang="vi">
 <head>
     <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
 
-    <title>{% block title %}miniLMS{% endblock %} · miniLMS</title>
+    <meta
+        name="viewport"
+        content="width=device-width, initial-scale=1"
+    >
 
+    <title>
+        {% block title %}miniLMS{% endblock %} · miniLMS
+    </title>
+
+    <!-- CSS chính -->
     <link
         rel="stylesheet"
         href="{{ url_for('static', filename='css/styles.css') }}"
@@ -16,55 +23,92 @@
 </head>
 
 <body>
+
+    <!-- ==================================
+         HEADER
+         ================================== -->
     <header>
+
+        <!-- LOGO -->
         <div class="brand">
-            <a href="/" class="brand-link">
+            <a
+                href="{{ url_for('pages.home') }}"
+                class="brand-link"
+            >
                 <span class="logo">LMS</span>
                 <span>miniLMS</span>
             </a>
         </div>
 
-       <nav>
-    <a href="{{ url_for('pages.home') }}">Trang chủ</a>
-    <a href="{{ url_for('pages.login_page') }}">Đăng nhập</a>
-    <a href="{{ url_for('pages.register_page') }}">Đăng ký</a>
-    <a href="{{ url_for('pages.account') }}">Tài khoản</a>
-    <a href="#" id="logout-link">Đăng xuất</a>
-       </nav>
+        <!-- NAVIGATION -->
+        <nav aria-label="Điều hướng chính">
+
+            <!-- Luôn hiển thị -->
+            <a href="{{ url_for('pages.home') }}">
+                Trang chủ
+            </a>
+
+            <!-- CHƯA ĐĂNG NHẬP -->
+            <a
+                href="{{ url_for('pages.login_page') }}"
+                class="guest-only"
+            >
+                Đăng nhập
+            </a>
+
+            <a
+                href="{{ url_for('pages.register_page') }}"
+                class="guest-only"
+            >
+                Đăng ký
+            </a>
+
+            <!-- ĐÃ ĐĂNG NHẬP -->
+            <a
+                href="{{ url_for('pages.account') }}"
+                class="auth-only"
+                hidden
+            >
+                Tài khoản
+            </a>
+
+            <a
+                href="#"
+                id="logout-link"
+                class="auth-only"
+                hidden
+            >
+                Đăng xuất
+            </a>
+
+        </nav>
     </header>
 
+    <!-- ==================================
+         MAIN CONTENT
+         ================================== -->
     <main>
         {% block content %}{% endblock %}
     </main>
 
+    <!-- ==================================
+         FOOTER
+         ================================== -->
     <footer>
-        miniLMS · Flask + JWT
+        <p class="sub">
+            &copy; 2026 miniLMS. All rights reserved.
+        </p>
     </footer>
 
-    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+    <!-- ==================================
+         JAVASCRIPT
+         ================================== -->
+
+    <script
+        src="{{ url_for('static', filename='js/app.js') }}"
+    ></script>
 
     {% block scripts %}{% endblock %}
 
-    <script>
-        document.addEventListener("DOMContentLoaded", function () {
-            const logoutLink = document.getElementById("logout-link");
-
-            if (!logoutLink) {
-                return;
-            }
-
-            logoutLink.addEventListener("click", function (event) {
-                event.preventDefault();
-
-                if (typeof logout === "function") {
-                    logout();
-                    return;
-                }
-
-                sessionStorage.removeItem("lms_token");
-                window.location.href = "/";
-            });
-        });
-    </script>
 </body>
 </html>

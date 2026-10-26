@@ -2,6 +2,7 @@
 
 from flask import Blueprint, render_template
 
+# Tên biến phải là bp để app/__init__.py import được
 bp = Blueprint(
     "pages",
     __name__,

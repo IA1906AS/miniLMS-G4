@@ -13,12 +13,11 @@ def register_gate(app):
         public_page_routes = {
             ("GET", "/"),
             ("GET", "/login"),
+            ("GET", "/register"),
+            ("GET", "/resetpassword"),
         }
 
-        # Chỉ mở các route mở rộng khi extension được bật.
-        public_extension_routes = {
-            ("GET", "/account"),
-            ("GET", "/resetpassword"),
+        public_api_routes = {
             ("POST", "/auth/register"),
             ("POST", "/auth/forgot-password"),
             ("POST", "/auth/reset-password"),
@@ -32,15 +31,20 @@ def register_gate(app):
         if (request.method, request.path) in public_page_routes:
             return
 
-        # Cho phép tài nguyên tĩnh của Flask: CSS, JS, ảnh...
-        if request.endpoint == "static":
+        # Cho phép các API công khai liên quan đến đăng ký / reset mật khẩu.
+        if (request.method, request.path) in public_api_routes:
             return
 
-        # Chỉ cho phép các route mở rộng khi được bật.
+        # Trang tài khoản chỉ mở khi extension được bật.
         if (
             current_app.config.get("ENABLE_EXTENSIONS", False)
-            and (request.method, request.path) in public_extension_routes
+            and request.method == "GET"
+            and request.path == "/account"
         ):
+            return
+
+        # Cho phép tài nguyên tĩnh của Flask: CSS, JS, ảnh...
+        if request.endpoint == "static":
             return
 
         # Các request còn lại cần Bearer JWT hợp lệ.

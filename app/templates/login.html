@@ -5,6 +5,7 @@
 
 {% block content %}
 <section class="card login-card">
+
     <div class="brand">
         <span class="logo">LMS</span>
         <span>miniLMS</span>
@@ -17,6 +18,8 @@
     </p>
 
     <form id="login-form" onsubmit="loginForm(event)">
+
+        <!-- EMAIL -->
         <label for="email">Email</label>
         <input
             id="email"
@@ -27,35 +30,84 @@
             required
         >
 
+        <!-- MẬT KHẨU -->
         <label for="password">Mật khẩu</label>
-        <input
-            id="password"
-            name="password"
-            type="password"
-            placeholder="Nhập mật khẩu"
-            autocomplete="current-password"
-            required
-        >
 
+        <div class="password-field">
+            <input
+                id="password"
+                name="password"
+                type="password"
+                placeholder="Nhập mật khẩu"
+                autocomplete="current-password"
+                required
+            >
+
+            <!-- NÚT HIỆN / ẨN MẬT KHẨU -->
+            <button
+                type="button"
+                id="toggle-password"
+                class="password-toggle"
+                aria-label="Hiện mật khẩu"
+                aria-pressed="false"
+                title="Hiện mật khẩu"
+            >
+                <!-- Mặc định: mắt không gạch, mật khẩu ẩn -->
+                <svg
+                    id="eye-icon"
+                    xmlns="http://www.w3.org/2000/svg"
+                    width="20"
+                    height="20"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    aria-hidden="true"
+                >
+                    <path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7z"/>
+                    <circle cx="12" cy="12" r="3"/>
+                </svg>
+            </button>
+        </div>
+
+        <!-- NÚT ĐĂNG NHẬP -->
         <button id="login-button" type="submit">
             Đăng nhập
         </button>
 
+        <!-- THÔNG BÁO -->
         <div
             id="login-msg"
             class="msg"
             role="status"
             aria-live="polite"
         ></div>
+
     </form>
 
+    <!-- ĐĂNG KÝ -->
     <p class="sub">
         Chưa có tài khoản?
-        <a href="/register">Đăng ký ngay</a>
+        <a href="{{ url_for('pages.register_page') }}">
+            Đăng ký ngay
+        </a>
     </p>
 
+    <!-- QUÊN MẬT KHẨU -->
     <p class="sub">
-        <a href="/">← Quay lại trang chủ</a>
+        <a href="{{ url_for('pages.reset_password_page') }}">
+            Quên mật khẩu?
+        </a>
     </p>
+
+    <!-- QUAY VỀ TRANG CHỦ -->
+    <p class="sub">
+        <a href="{{ url_for('pages.home') }}">
+            ← Quay lại trang chủ
+        </a>
+    </p>
+
 </section>
 {% endblock %}
