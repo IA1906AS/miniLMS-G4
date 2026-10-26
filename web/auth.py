@@ -20,7 +20,15 @@ from web.db import get_db
 auth_bp = Blueprint("auth", __name__)
 
 # Hash du phong cho email khong ton tai
-DUMMY_HASH = bcrypt.hashpw(b"dummy-password", bcrypt.gensalt(rounds=12))
+DUMMY_HASH = bcrypt.hashpw(
+    b"dummy-password",
+    bcrypt.gensalt(rounds=12),
+)
+
+
+# =================================
+# 1. CSRF TOKEN
+# =================================
 
 
 def csrf_token():
@@ -38,6 +46,11 @@ def check_csrf():
         abort(400)
 
 
+# =================================
+# 2. LOAD USER
+# =================================
+
+
 @auth_bp.before_app_request
 def load_user():
     g.user = None
@@ -49,10 +62,10 @@ def load_user():
             get_db()
             .execute(
                 """
-            SELECT id, full_name, email, role
-            FROM users
-            WHERE id = ?
-            """,
+                SELECT id, full_name, email, role
+                FROM users
+                WHERE id = ?
+                """,
                 (user_id,),
             )
             .fetchone()
@@ -60,7 +73,7 @@ def load_user():
 
 
 # =================================
-# DANG KY
+# 3. DANG KY
 # =================================
 
 
@@ -81,7 +94,12 @@ def register():
             flash("Ho ten phai co 2-100 ky tu.")
 
         elif (
-            len(email) > 254 or re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email) is None
+            len(email) > 254
+            or re.fullmatch(
+                r"[^@\s]+@[^@\s]+\.[^@\s]+",
+                email,
+            )
+            is None
         ):
             flash("Email khong hop le.")
 
@@ -90,7 +108,8 @@ def register():
 
         else:
             password_hash = bcrypt.hashpw(
-                password_bytes, bcrypt.gensalt(rounds=12)
+                password_bytes,
+                bcrypt.gensalt(rounds=12),
             ).decode("utf-8")
 
             db = get_db()
@@ -123,7 +142,7 @@ def register():
 
 
 # =================================
-# DANG NHAP
+# 4. DANG NHAP
 # =================================
 
 
@@ -137,7 +156,12 @@ def login():
         password = request.form.get("password", "")
 
         user = (
-            get_db().execute("SELECT * FROM users WHERE email = ?", (email,)).fetchone()
+            get_db()
+            .execute(
+                "SELECT * FROM users WHERE email = ?",
+                (email,),
+            )
+            .fetchone()
         )
 
         password_bytes = password.encode("utf-8")
@@ -152,7 +176,10 @@ def login():
                 else DUMMY_HASH
             )
 
-            password_ok = bcrypt.checkpw(password_bytes, password_hash)
+            password_ok = bcrypt.checkpw(
+                password_bytes,
+                password_hash,
+            )
 
         if user is None or not password_ok:
             flash("Email hoac mat khau khong dung.")
@@ -167,20 +194,128 @@ def login():
 
 
 # =================================
-# TAI KHOAN
+# 5. ACCOUNT - PHAN QUYEN XEM DIEM
 # =================================
 
 
 @auth_bp.get("/account")
 def account():
+    # Kiem tra dang nhap
     if g.user is None:
         return redirect(url_for("auth.login"))
 
-    return render_template("account.html")
+    db = get_db()
+
+    role = g.user["role"]
+    user_id = g.user["id"]
+
+    grades = []
+
+    # =================================
+    # ADMIN - XEM TAT CA DIEM
+    # =================================
+
+    if role == "ADMIN":
+        grades = db.execute(
+            """
+            SELECT
+                c.id AS course_id,
+                c.title AS course_title,
+                s.full_name AS student_name,
+                s.email AS student_email,
+                i.full_name AS instructor_name,
+                e.score
+            FROM enrollments AS e
+
+            JOIN courses AS c
+                ON e.course_id = c.id
+
+            JOIN users AS s
+                ON e.student_id = s.id
+
+            JOIN users AS i
+                ON c.instructor_id = i.id
+
+            ORDER BY c.title, s.email
+            """
+        ).fetchall()
+
+    # =================================
+    # INSTRUCTOR - XEM DIEM MON MINH DAY
+    # =================================
+
+    elif role == "INSTRUCTOR":
+        grades = db.execute(
+            """
+            SELECT
+                c.id AS course_id,
+                c.title AS course_title,
+                s.full_name AS student_name,
+                s.email AS student_email,
+                i.full_name AS instructor_name,
+                e.score
+            FROM enrollments AS e
+
+            JOIN courses AS c
+                ON e.course_id = c.id
+
+            JOIN users AS s
+                ON e.student_id = s.id
+
+            JOIN users AS i
+                ON c.instructor_id = i.id
+
+            WHERE c.instructor_id = ?
+
+            ORDER BY c.title, s.email
+            """,
+            (user_id,),
+        ).fetchall()
+
+    # =================================
+    # STUDENT - CHI XEM DIEM CUA MINH
+    # =================================
+
+    elif role == "STUDENT":
+        grades = db.execute(
+            """
+            SELECT
+                c.id AS course_id,
+                c.title AS course_title,
+                i.full_name AS instructor_name,
+                e.score
+            FROM enrollments AS e
+
+            JOIN courses AS c
+                ON e.course_id = c.id
+
+            JOIN users AS i
+                ON c.instructor_id = i.id
+
+            WHERE e.student_id = ?
+
+            ORDER BY c.title
+            """,
+            (user_id,),
+        ).fetchall()
+
+    # Vai tro khong hop le
+    else:
+        abort(403)
+
+    # =================================
+    # HIEN THI GIAO DIEN
+    # =================================
+
+    return render_template(
+        "account.html",
+        grades=grades,
+        role=role,
+    )
 
 
 # =================================
-# DANG XUAT
+# 6. DANG XUAT
 # =================================
 
 

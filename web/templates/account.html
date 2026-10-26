@@ -3,26 +3,291 @@
 
 {% block content %}
 
-<h2>Thông tin tài khoản</h2>
+<style>
+    .container {
+        max-width: 1100px;
+    }
 
-<p>
-    <strong>Họ tên:</strong>
-    {{ g.user["full_name"] }}
-</p>
+    .account-title {
+        color: #6336ff;
+        margin-bottom: 24px;
+    }
 
-<p>
-    <strong>Email:</strong>
-    {{ g.user["email"] }}
-</p>
+    .account-info {
+        line-height: 1.8;
+    }
 
-<p>
-    <strong>Vai trò:</strong>
-    {{ g.user["role"] }}
-</p>
+    .account-info p {
+        margin: 10px 0;
+    }
 
-<p>
-    <strong>ID:</strong>
-    {{ g.user["id"] }}
-</p>
+    .role-badge {
+        display: inline-block;
+        padding: 5px 12px;
+        border-radius: 8px;
+        background: #eee7ff;
+        color: #6336ff;
+        font-weight: bold;
+    }
+
+    .grade-section {
+        margin-top: 32px;
+    }
+
+    .grade-heading {
+        color: #6336ff;
+        margin-bottom: 14px;
+    }
+
+    .grade-summary {
+        background: #f0ebff;
+        color: #4c1d95;
+        border-radius: 10px;
+        padding: 16px;
+        margin: 20px 0;
+    }
+
+    .table-wrapper {
+        overflow-x: auto;
+        border-radius: 10px;
+        border: 1px solid #e5e7eb;
+    }
+
+    .grade-table {
+        width: 100%;
+        border-collapse: collapse;
+        min-width: 560px;
+    }
+
+    .grade-table th {
+        padding: 14px;
+        background: #6336ff;
+        color: white;
+        text-align: left;
+    }
+
+    .grade-table td {
+        padding: 14px;
+        border-bottom: 1px solid #e5e7eb;
+    }
+
+    .grade-table tr:nth-child(even) {
+        background: #f8f7ff;
+    }
+
+    .grade-table tbody tr:hover {
+        background: #f0ebff;
+    }
+
+    .score {
+        font-weight: bold;
+        color: #15803d;
+    }
+
+    .student-email {
+        font-size: 12px;
+        color: #6b7280;
+    }
+
+    .empty-message {
+        padding: 20px;
+        border-radius: 8px;
+        background: #f3f4f6;
+    }
+
+    @media (max-width: 600px) {
+        .container {
+            margin: 20px 12px;
+            padding: 20px;
+        }
+
+        .account-title {
+            font-size: 24px;
+        }
+
+        .grade-table th,
+        .grade-table td {
+            padding: 10px;
+        }
+    }
+</style>
+
+
+<!-- THONG TIN TAI KHOAN -->
+
+<h2 class="account-title">
+    Thông tin tài khoản
+</h2>
+
+<div class="account-info">
+
+    <p>
+        <strong>Họ tên:</strong>
+        {{ g.user["full_name"] }}
+    </p>
+
+    <p>
+        <strong>Email:</strong>
+        {{ g.user["email"] }}
+    </p>
+
+    <p>
+        <strong>Vai trò:</strong>
+        <span class="role-badge">
+            {{ role }}
+        </span>
+    </p>
+
+    <p>
+        <strong>ID:</strong>
+        {{ g.user["id"] }}
+    </p>
+
+</div>
+
+<hr>
+
+
+<!-- PHAN HIEN THI DIEM THEO VAI TRO -->
+
+<section class="grade-section">
+
+    {% if role == "ADMIN" %}
+
+        <h2 class="grade-heading">
+            Quản lý toàn bộ điểm sinh viên
+        </h2>
+
+        <p>
+            Danh sách điểm của tất cả sinh viên
+            trong hệ thống Mini LMS.
+        </p>
+
+    {% elif role == "INSTRUCTOR" %}
+
+        <h2 class="grade-heading">
+            Điểm các môn học phụ trách
+        </h2>
+
+        <p>
+            Danh sách điểm sinh viên thuộc
+            các môn học bạn đang giảng dạy.
+        </p>
+
+    {% elif role == "STUDENT" %}
+
+        <h2 class="grade-heading">
+            Kết quả học tập của tôi
+        </h2>
+
+        <p>
+            Điểm các môn học mà bạn đã đăng ký.
+        </p>
+
+    {% endif %}
+
+
+    <!-- TONG SO BAN GHI -->
+
+    <div class="grade-summary">
+        <strong>
+            Tổng số bản ghi điểm:
+            {{ grades | length }}
+        </strong>
+    </div>
+
+
+    <!-- BANG DIEM -->
+
+    {% if grades %}
+
+    <div class="table-wrapper">
+
+        <table class="grade-table">
+
+            <thead>
+                <tr>
+                    <th>STT</th>
+                    <th>Mã môn</th>
+                    <th>Tên môn học</th>
+
+                    {% if role in ("ADMIN", "INSTRUCTOR") %}
+                        <th>Sinh viên</th>
+                    {% endif %}
+
+                    {% if role in ("ADMIN", "STUDENT") %}
+                        <th>Giảng viên</th>
+                    {% endif %}
+
+                    <th>Điểm</th>
+                </tr>
+            </thead>
+
+            <tbody>
+
+                {% for grade in grades %}
+
+                <tr>
+
+                    <td>
+                        {{ loop.index }}
+                    </td>
+
+                    <td>
+                        {{ grade["course_id"] }}
+                    </td>
+
+                    <td>
+                        {{ grade["course_title"] }}
+                    </td>
+
+                    <!-- ADMIN VA GIANG VIEN -->
+                    {% if role in ("ADMIN", "INSTRUCTOR") %}
+
+                        <td>
+                            {{ grade["student_name"] }}
+
+                            <div class="student-email">
+                                {{ grade["student_email"] }}
+                            </div>
+                        </td>
+
+                    {% endif %}
+
+
+                    <!-- ADMIN VA SINH VIEN -->
+                    {% if role in ("ADMIN", "STUDENT") %}
+
+                        <td>
+                            {{ grade["instructor_name"] }}
+                        </td>
+
+                    {% endif %}
+
+
+                    <!-- DIEM SO -->
+                    <td class="score">
+                        {{ "%.1f"|format(grade["score"]) }}
+                    </td>
+
+                </tr>
+
+                {% endfor %}
+
+            </tbody>
+
+        </table>
+
+    </div>
+
+    {% else %}
+
+        <div class="empty-message">
+            Chưa có dữ liệu điểm để hiển thị.
+        </div>
+
+    {% endif %}
+
+</section>
 
 {% endblock %}
