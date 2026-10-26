@@ -699,3 +699,99 @@ def test_password_reset_revokes_old_jwt(tmp_path, backend):
         },
     )
     assert reused.status_code == 400
+
+
+# ==========================================
+# RATE LIMITING - PASSWORD RESET
+# ==========================================
+
+
+def rate_limit_client(tmp_path, backend, suffix):
+    """Create an isolated Flask app for rate-limit tests."""
+    config = {
+        "TESTING": True,
+        "JWT_SECRET": SECRET,
+        "AUDIT_LOG_PATH": str(tmp_path / f"rate_{backend}_{suffix}.log"),
+        "ENABLE_EXTENSIONS": True,
+        "RESET_TOKEN_ECHO": True,
+        "BCRYPT_ROUNDS": 4,
+        "LMS_STORE": backend,
+        "SQLITE_PATH": str(tmp_path / f"rate_{backend}_{suffix}.sqlite3"),
+    }
+    return create_app(config).test_client()
+
+
+@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+def test_forgot_password_email_rate_limit(tmp_path, backend):
+    c = rate_limit_client(tmp_path, backend, "email")
+    email = "chi.sv@lms.test"
+
+    for _ in range(3):
+        response = c.post("/auth/forgot-password", json={"email": email})
+        assert response.status_code == 202
+
+    response = c.post("/auth/forgot-password", json={"email": email})
+    assert_error(response, 429, "RATE_LIMITED")
+    assert response.headers.get("Retry-After") == "900"
+
+    # A different email is still allowed from this IP.
+    response = c.post("/auth/forgot-password", json={"email": "another@lms.test"})
+    assert response.status_code == 202
+    assert response.get_json() == {"status": "sent"}
+
+
+@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+def test_forgot_password_ip_rate_limit(tmp_path, backend):
+    c = rate_limit_client(tmp_path, backend, "ip")
+
+    for i in range(10):
+        response = c.post(
+            "/auth/forgot-password", json={"email": f"unknown{i}@lms.test"}
+        )
+        assert response.status_code == 202
+        assert response.get_json() == {"status": "sent"}
+
+    response = c.post("/auth/forgot-password", json={"email": "unknown10@lms.test"})
+    assert_error(response, 429, "RATE_LIMITED")
+
+
+@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+def test_reset_password_ip_rate_limit(tmp_path, backend):
+    c = rate_limit_client(tmp_path, backend, "reset")
+
+    for _ in range(5):
+        response = c.post(
+            "/auth/reset-password",
+            json={"token": "invalid-reset-token", "password": "NewPass123"},
+        )
+        assert_error(response, 400, "VALIDATION_ERROR")
+
+    response = c.post(
+        "/auth/reset-password",
+        json={"token": "invalid-reset-token", "password": "NewPass123"},
+    )
+    assert_error(response, 429, "RATE_LIMITED")
+    assert response.headers.get("Retry-After") == "900"
+
+
+@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+def test_rate_limit_window_expires(tmp_path, backend, monkeypatch):
+    import app.api.reset as reset_module
+
+    clock = [1000.0]
+    monkeypatch.setattr(reset_module.time, "monotonic", lambda: clock[0])
+    c = rate_limit_client(tmp_path, backend, "expiry")
+    email = "expiring@lms.test"
+
+    for _ in range(3):
+        assert c.post("/auth/forgot-password", json={"email": email}).status_code == 202
+
+    assert_error(
+        c.post("/auth/forgot-password", json={"email": email}),
+        429,
+        "RATE_LIMITED",
+    )
+
+    clock[0] += 901
+    response = c.post("/auth/forgot-password", json={"email": email})
+    assert response.status_code == 202

@@ -1,10 +1,10 @@
 """Password reset endpoints for miniLMS.
 
 POST /auth/forgot-password:
-    Generate a one-time reset token.
+    Generate a one-time reset token with rate limiting.
 
 POST /auth/reset-password:
-    Update password and invalidate old JWT tokens.
+    Update password, invalidate old JWTs, and limit reset attempts.
 
 RESET_TOKEN_ECHO is only intended for demo environments.
 """
@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import secrets
 import time
+from collections import defaultdict, deque
+from threading import Lock
 
 from flask import Blueprint, Response, current_app, jsonify, request
 
@@ -25,20 +27,88 @@ bp = Blueprint("reset", __name__)
 
 TOKEN_BYTES = 32
 
+RATE_LIMIT_WINDOW_SECONDS = 15 * 60
+FORGOT_EMAIL_LIMIT = 3
+FORGOT_IP_LIMIT = 10
+RESET_IP_LIMIT = 5
+
+# Shared within this Python process.
+# Production deployments should use a shared backend such as Redis.
+_rate_limit_records: dict[str, deque[float]] = defaultdict(deque)
+_rate_limit_lock = Lock()
+
 
 def _store():
     """Return the configured LMS storage backend."""
     return current_app.extensions["lms_store"]
 
 
+def _client_ip() -> str:
+    """Use the direct peer address, not an untrusted forwarded header."""
+    return request.remote_addr or "unknown"
+
+
+def _rate_limit_key(category: str, identifier: str) -> str:
+    """Scope rate limits to the current application instance."""
+    return f"{id(current_app._get_current_object())}:{category}:{identifier}"
+
+
+def _check_rate_limit(
+    category: str,
+    identifier: str,
+    limit: int,
+) -> bool:
+    """Atomically check and record an attempt within a sliding window."""
+    now = time.monotonic()
+    key = _rate_limit_key(category, identifier)
+
+    with _rate_limit_lock:
+        attempts = _rate_limit_records[key]
+        cutoff = now - RATE_LIMIT_WINDOW_SECONDS
+
+        while attempts and attempts[0] <= cutoff:
+            attempts.popleft()
+
+        if len(attempts) >= limit:
+            return False
+
+        attempts.append(now)
+        return True
+
+
+def _rate_limited() -> tuple[Response, int]:
+    """Return a consistent rate-limit response."""
+    response = jsonify({"error": "RATE_LIMITED"})
+    response.headers["Retry-After"] = str(RATE_LIMIT_WINDOW_SECONDS)
+    return response, 429
+
+
 @bp.post("/auth/forgot-password")
 def forgot_password() -> tuple[Response, int]:
-    """Generate a one-time password reset token."""
+    """Generate a one-time password reset token with rate limiting."""
 
     email = validate_reset_request(request.get_json(silent=True))
 
-    store = _store()
     cfg = current_app.config
+    store = _store()
+
+    ip = _client_ip()
+
+    # Apply both IP and email limits.
+    # The limits are evaluated regardless of account existence.
+    ip_allowed = _check_rate_limit(
+        "forgot-ip",
+        ip,
+        FORGOT_IP_LIMIT,
+    )
+    email_allowed = _check_rate_limit(
+        "forgot-email",
+        email,
+        FORGOT_EMAIL_LIMIT,
+    )
+
+    if not ip_allowed or not email_allowed:
+        return _rate_limited()
 
     # Avoid revealing whether an email exists.
     payload: dict[str, object] = {"status": "sent"}
@@ -72,8 +142,16 @@ def forgot_password() -> tuple[Response, int]:
 
 
 @bp.post("/auth/reset-password")
-def reset_password() -> Response:
+def reset_password() -> Response | tuple[Response, int]:
     """Reset password and invalidate previously issued JWTs."""
+
+    # Rate-limit attempts before processing reset tokens.
+    if not _check_rate_limit(
+        "reset-ip",
+        _client_ip(),
+        RESET_IP_LIMIT,
+    ):
+        return _rate_limited()
 
     token, password = validate_reset_confirm(request.get_json(silent=True))
 
@@ -122,18 +200,12 @@ def reset_password() -> Response:
             raise ValidationError("token không hợp lệ hoặc đã hết hạn")
 
         user["password_hash"] = password_hash
-
-        # Invalidate all previously issued JWTs.
-        # Use 0 as the default for older user records.
         user["token_version"] = user.get("token_version", 0) + 1
 
     else:
-        # SQLite update_password() must increment
-        # token_version in the same transaction.
-        store.update_password(
-            user_id,
-            password_hash,
-        )
+        # SQLite update_password() increments token_version
+        # in the same transaction.
+        store.update_password(user_id, password_hash)
 
     # ==========================================
     # STEP 4: Write security audit log
@@ -145,9 +217,5 @@ def reset_password() -> Response:
         resource=f"users/{user_id}/password",
         result="SUCCESS",
     )
-
-    # ==========================================
-    # STEP 5: Return success response
-    # ==========================================
 
     return jsonify({"status": "password-updated"})
