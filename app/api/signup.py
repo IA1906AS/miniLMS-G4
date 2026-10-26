@@ -13,19 +13,41 @@ bp = Blueprint("signup", __name__)
 
 @bp.post("/auth/register")
 def register() -> tuple[Response, int]:
+    """Register a new student account with JWT token versioning."""
+
     store = current_app.extensions["lms_store"]
+
+    # ==========================================
+    # STEP 1: Validate registration request
+    # ==========================================
+
     email, password = validate_register_body(request.get_json(silent=True))
+
+    # ==========================================
+    # STEP 2: Check whether email already exists
+    # ==========================================
 
     if isinstance(store, dict):
         existing_user = email in store["users_by_email"]
     else:
         existing_user = store.find_user_by_email(email) is not None
+
     if existing_user:
         raise ValidationError("email đã được đăng ký")
 
+    # ==========================================
+    # STEP 3: Hash password
+    # ==========================================
+
     password_hash = hash_password(
-        password, rounds=int(current_app.config["BCRYPT_ROUNDS"])
+        password,
+        rounds=int(current_app.config["BCRYPT_ROUNDS"]),
     )
+
+    # ==========================================
+    # STEP 4: Create user
+    # ==========================================
+
     if isinstance(store, dict):
         next_id = (
             max(
@@ -38,16 +60,37 @@ def register() -> tuple[Response, int]:
             )
             + 1
         )
+
         user_id = f"u{next_id}"
+
         store["users"][user_id] = {
             "id": user_id,
             "email": email,
             "role": "STUDENT",
             "password_hash": password_hash,
+            "token_version": 0,
         }
+
         store["users_by_email"][email] = user_id
+
     else:
-        user = store.add_user(email=email, password_hash=password_hash, role="STUDENT")
+        # SQLite add_user() initializes token_version=0.
+        user = store.add_user(
+            email=email,
+            password_hash=password_hash,
+            role="STUDENT",
+        )
+
         user_id = user.id
 
-    return jsonify({"id": user_id, "email": email, "role": "STUDENT"}), 201
+    # ==========================================
+    # STEP 5: Return registration response
+    # ==========================================
+
+    return jsonify(
+        {
+            "id": user_id,
+            "email": email,
+            "role": "STUDENT",
+        }
+    ), 201
