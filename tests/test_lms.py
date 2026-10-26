@@ -598,3 +598,104 @@ def test_optional_extensions_work_with_store_backends(tmp_path, backend):
 
     new_login = login(client, "new@lms.test", "ChangedPass123")
     assert new_login.status_code == 200
+
+
+# ==========================================
+# JWT TOKEN VERSIONING - MEMORY AND SQLITE
+# ==========================================
+
+
+@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+def test_password_reset_revokes_old_jwt(tmp_path, backend):
+    config = {
+        "TESTING": True,
+        "JWT_SECRET": SECRET,
+        "AUDIT_LOG_PATH": str(tmp_path / f"revocation_{backend}.log"),
+        "ENABLE_EXTENSIONS": True,
+        "RESET_TOKEN_ECHO": True,
+        "BCRYPT_ROUNDS": 4,
+        "LMS_STORE": backend,
+        "SQLITE_PATH": str(tmp_path / f"revocation_{backend}.sqlite3"),
+    }
+
+    test_app = create_app(config)
+    client = test_app.test_client()
+
+    email = "revocation@lms.test"
+    original_password = "OriginalPass123"
+    new_password = "ChangedPass123"
+
+    registration = client.post(
+        "/auth/register",
+        json={"email": email, "password": original_password},
+    )
+    assert registration.status_code == 201
+
+    initial_login = login(client, email, original_password)
+    assert initial_login.status_code == 200
+
+    old_token = initial_login.get_json()["accessToken"]
+    old_claims = jwt.decode(
+        old_token,
+        SECRET,
+        algorithms=["HS256"],
+    )
+
+    assert old_claims["ver"] == 0
+    assert client.get("/me", headers=headers(old_token)).status_code == 200
+
+    forgot = client.post(
+        "/auth/forgot-password",
+        json={"email": email},
+    )
+    assert forgot.status_code == 202
+
+    reset_token = forgot.get_json()["resetToken"]
+
+    reset = client.post(
+        "/auth/reset-password",
+        json={
+            "token": reset_token,
+            "password": new_password,
+        },
+    )
+    assert reset.status_code == 200
+
+    # JWT cu phai bi vo hieu hoa.
+    assert_error(
+        client.get("/me", headers=headers(old_token)),
+        401,
+        "UNAUTHENTICATED",
+    )
+
+    # Mat khau cu khong con hop le.
+    assert_error(
+        login(client, email, original_password),
+        401,
+        "INVALID_CREDENTIALS",
+    )
+
+    # Dang nhap bang mat khau moi.
+    new_login = login(client, email, new_password)
+    assert new_login.status_code == 200
+
+    new_token = new_login.get_json()["accessToken"]
+    new_claims = jwt.decode(
+        new_token,
+        SECRET,
+        algorithms=["HS256"],
+    )
+
+    assert new_claims["ver"] == old_claims["ver"] + 1
+
+    assert client.get("/me", headers=headers(new_token)).status_code == 200
+
+    # Reset token chi duoc su dung mot lan.
+    reused = client.post(
+        "/auth/reset-password",
+        json={
+            "token": reset_token,
+            "password": "AnotherPass123",
+        },
+    )
+    assert reused.status_code == 400

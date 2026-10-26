@@ -14,6 +14,7 @@ class User:
     email: str
     role: str
     password_hash: str
+    token_version: int = 0
 
 
 @dataclass
@@ -58,6 +59,7 @@ def load_seed():
         )
 
         user["password_hash"] = password_hash.decode("utf-8")
+        user["token_version"] = 0
 
         users[user["id"]] = user
         users_by_email[user["email"].lower()] = user["id"]
