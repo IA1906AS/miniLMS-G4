@@ -1,0 +1,31 @@
+
+{% extends "base.html" %}
+
+{% block content %}
+
+<h2>Chào mừng đến Mini LMS</h2>
+
+<p>
+    Hệ thống quản lý học tập dành cho
+    sinh viên và giảng viên.
+</p>
+
+{% if g.user %}
+    <p>
+        Xin chào, {{ g.user["full_name"] }}!
+    </p>
+
+    <a href="{{ url_for('auth.account') }}">
+        Xem tài khoản
+    </a>
+{% else %}
+    <p>
+        Đăng ký tài khoản để bắt đầu.
+    </p>
+
+    <a href="{{ url_for('auth.register') }}">
+        Đăng ký ngay
+    </a>
+{% endif %}
+
+{% endblock %}

@@ -1,0 +1,42 @@
+
+{% extends "base.html" %}
+
+{% block content %}
+
+<h2>Đăng ký tài khoản</h2>
+
+<form method="post">
+    <input type="hidden"
+           name="csrf_token"
+           value="{{ csrf_token() }}">
+
+    <label>Họ và tên</label>
+    <input type="text"
+           name="full_name"
+           required
+           maxlength="100">
+
+    <label>Email</label>
+    <input type="email"
+           name="email"
+           required>
+
+    <label>Mật khẩu</label>
+    <input type="password"
+           name="password"
+           minlength="8"
+           required>
+
+    <button class="full" type="submit">
+        Đăng ký
+    </button>
+</form>
+
+<p>
+    Đã có tài khoản?
+    <a href="{{ url_for('auth.login') }}">
+        Đăng nhập
+    </a>
+</p>
+
+{% endblock %}

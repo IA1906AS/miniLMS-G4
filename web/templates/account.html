@@ -1,0 +1,28 @@
+
+{% extends "base.html" %}
+
+{% block content %}
+
+<h2>Thông tin tài khoản</h2>
+
+<p>
+    <strong>Họ tên:</strong>
+    {{ g.user["full_name"] }}
+</p>
+
+<p>
+    <strong>Email:</strong>
+    {{ g.user["email"] }}
+</p>
+
+<p>
+    <strong>Vai trò:</strong>
+    {{ g.user["role"] }}
+</p>
+
+<p>
+    <strong>ID:</strong>
+    {{ g.user["id"] }}
+</p>
+
+{% endblock %}

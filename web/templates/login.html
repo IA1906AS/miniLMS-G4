@@ -1,0 +1,45 @@
+
+{% extends "base.html" %}
+
+{% block content %}
+
+<h2>Đăng nhập Mini LMS</h2>
+
+<form method="post">
+    <input type="hidden"
+           name="csrf_token"
+           value="{{ csrf_token() }}">
+
+    <label>Email</label>
+    <input type="email"
+           name="email"
+           placeholder="Nhập email của bạn"
+           autocomplete="email"
+           required>
+
+    <label>Mật khẩu</label>
+    <input type="password"
+           name="password"
+           placeholder="Nhập mật khẩu"
+           autocomplete="current-password"
+           required>
+
+    <div style="text-align: right; margin-bottom: 18px;">
+        <a href="{{ url_for('password_reset.forgot_password') }}">
+            Quên mật khẩu?
+        </a>
+    </div>
+
+    <button class="full" type="submit">
+        Đăng nhập
+    </button>
+</form>
+
+<p style="text-align: center; margin-top: 20px;">
+    Chưa có tài khoản?
+    <a href="{{ url_for('auth.register') }}">
+        Đăng ký
+    </a>
+</p>
+
+{% endblock %}
