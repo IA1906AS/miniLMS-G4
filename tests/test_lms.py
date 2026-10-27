@@ -1,5 +1,7 @@
 import base64
+import hashlib
 import json
+import sqlite3
 import time
 from pathlib import Path
 
@@ -12,6 +14,15 @@ from app.api.services import update_grade
 
 SECRET = "test-secret-for-local-pytest-only-0123456789abcdef"
 PASSWORD = "Lms@2026"
+
+
+@pytest.fixture(autouse=True)
+def isolate_rate_limit_database(tmp_path, monkeypatch):
+    """Give each test its own rate-limit SQLite database."""
+    monkeypatch.setenv(
+        "RATE_LIMIT_DB_PATH",
+        str(tmp_path / "rate_limits.sqlite3"),
+    )
 
 
 # ==========================================
@@ -398,19 +409,15 @@ def test_a17_missing_secret(monkeypatch):
 
 
 def test_a18_account_lockout(client):
-    for attempt in range(1, 6):
-        response = login(client, "dung.sv@lms.test", "wrong-password")
+    """Repeated wrong passwords must not hard-lock an account."""
 
-        if attempt < 5:
-            assert_error(response, 401, "INVALID_CREDENTIALS")
-
-        else:
-            assert_error(response, 429, "ACCOUNT_LOCKED")
-
-    # Mat khau dung van bi khoa
-    response = login(client, "dung.sv@lms.test", PASSWORD)
-
-    assert_error(response, 429, "ACCOUNT_LOCKED")
+    for _ in range(5):
+        response = login(
+            client,
+            "dung.sv@lms.test",
+            "wrong-password",
+        )
+        assert_error(response, 401, "INVALID_CREDENTIALS")
 
 
 # ==========================================
@@ -774,17 +781,239 @@ def test_reset_password_ip_rate_limit(tmp_path, backend):
     assert response.headers.get("Retry-After") == "900"
 
 
+# ==========================================
+# APP ISOLATION AND RATE-LIMIT MEMORY CLEANUP
+# ==========================================
+
+
 @pytest.mark.parametrize("backend", ["memory", "sqlite"])
-def test_rate_limit_window_expires(tmp_path, backend, monkeypatch):
-    import app.api.reset as reset_module
+def test_rate_limit_shared_between_apps(tmp_path, backend):
+    first = rate_limit_client(
+        tmp_path,
+        backend,
+        "shared_first",
+    )
+    second = rate_limit_client(
+        tmp_path,
+        backend,
+        "shared_second",
+    )
+
+    email = "shared@lms.test"
+
+    for _ in range(3):
+        response = first.post(
+            "/auth/forgot-password",
+            json={"email": email},
+        )
+        assert response.status_code == 202
+
+    # The second Flask app must observe the same limit.
+    response = second.post(
+        "/auth/forgot-password",
+        json={"email": email},
+    )
+
+    assert_error(response, 429, "RATE_LIMITED")
+    assert int(response.headers["Retry-After"]) > 0
+
+
+@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+def test_rate_limit_expired_keys_are_cleaned_up(tmp_path, backend, monkeypatch):
+    import sqlite3
+
+    import app.api.rate_limit as rate_limit_module
 
     clock = [1000.0]
-    monkeypatch.setattr(reset_module.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(rate_limit_module.time, "time", lambda: clock[0])
+
+    c = rate_limit_client(tmp_path, backend, "cleanup")
+
+    for i in range(20):
+        response = c.post(
+            "/auth/forgot-password",
+            json={"email": f"cleanup{i}@lms.test"},
+            environ_overrides={"REMOTE_ADDR": f"192.0.2.{i + 1}"},
+        )
+        assert response.status_code == 202
+
+    db_path = c.application.config["RATE_LIMIT_DB_PATH"]
+
+    with sqlite3.connect(db_path) as conn:
+        before = conn.execute("SELECT COUNT(*) FROM rate_limits").fetchone()[0]
+
+    assert before > 0
+
+    # Advance beyond the 15-minute window.
+    clock[0] += 901
+
+    response = c.post(
+        "/auth/forgot-password",
+        json={"email": "after-cleanup@lms.test"},
+    )
+    assert response.status_code == 202
+
+    with sqlite3.connect(db_path) as conn:
+        expired = conn.execute(
+            "SELECT COUNT(*) FROM rate_limits WHERE expires_at <= ?",
+            (clock[0],),
+        ).fetchone()[0]
+
+    assert expired == 0
+
+
+# ==========================================
+# HASHED RESET TOKEN - MEMORY AND SQLITE
+# ==========================================
+
+
+def hashed_token_client(tmp_path, backend, suffix):
+    config = {
+        "TESTING": True,
+        "JWT_SECRET": SECRET,
+        "AUDIT_LOG_PATH": str(tmp_path / f"hashed_{backend}_{suffix}.log"),
+        "ENABLE_EXTENSIONS": True,
+        "RESET_TOKEN_ECHO": True,  # Test-only: expose token to test client.
+        "RESET_TOKEN_TTL_SECONDS": 900,
+        "BCRYPT_ROUNDS": 4,
+        "LMS_STORE": backend,
+        "SQLITE_PATH": str(tmp_path / f"hashed_{backend}_{suffix}.sqlite3"),
+    }
+    test_app = create_app(config)
+    return test_app, test_app.test_client()
+
+
+def issue_reset_token(client):
+    response = client.post("/auth/forgot-password", json={"email": "chi.sv@lms.test"})
+    assert response.status_code == 202
+    return response.get_json()["resetToken"]
+
+
+@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+def test_reset_token_only_hash_is_stored(tmp_path, backend):
+    test_app, client = hashed_token_client(tmp_path, backend, "storage")
+    token = issue_reset_token(client)
+    digest = hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+    if backend == "memory":
+        records = test_app.extensions["lms_reset_tokens"]
+        assert token not in records
+        assert digest in records
+        assert len(records) == 1
+    else:
+        with sqlite3.connect(test_app.config["SQLITE_PATH"]) as conn:
+            stored = [row[0] for row in conn.execute("SELECT token FROM reset_tokens")]
+        assert token not in stored
+        assert stored == [digest]
+
+    assert token != digest
+    assert len(digest) == 64
+
+
+@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+def test_hashed_reset_token_is_one_time(tmp_path, backend):
+    _, client = hashed_token_client(tmp_path, backend, "one_time")
+    token = issue_reset_token(client)
+    payload = {"token": token, "password": "ChangedPass123"}
+
+    first = client.post("/auth/reset-password", json=payload)
+    assert first.status_code == 200
+    assert login(client, "chi.sv@lms.test", "ChangedPass123").status_code == 200
+
+    second = client.post("/auth/reset-password", json=payload)
+    assert_error(second, 400, "VALIDATION_ERROR")
+
+
+@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+def test_hashed_reset_token_expiry(tmp_path, backend, monkeypatch):
+    import app.api.reset as reset_module
+
+    _, client = hashed_token_client(tmp_path, backend, "expired")
+    token = issue_reset_token(client)
+    # Advance wall-clock time without waiting 15 minutes.
+    now = time.time()
+    monkeypatch.setattr(reset_module.time, "time", lambda: now + 901)
+
+    expired = client.post(
+        "/auth/reset-password",
+        json={"token": token, "password": "ChangedPass123"},
+    )
+    assert_error(expired, 400, "VALIDATION_ERROR")
+    assert login(client, "chi.sv@lms.test", PASSWORD).status_code == 200
+
+
+# ==========================================
+# SERVER-SIDE JWT LOGOUT
+# ==========================================
+
+
+@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+def test_logout_revokes_only_current_jwt(tmp_path, backend):
+    config = {
+        "TESTING": True,
+        "JWT_SECRET": SECRET,
+        "AUDIT_LOG_PATH": str(tmp_path / f"logout_{backend}.log"),
+        "LMS_STORE": backend,
+        "SQLITE_PATH": str(tmp_path / f"logout_{backend}.sqlite3"),
+        "BCRYPT_ROUNDS": 4,
+    }
+    test_app = create_app(config)
+    c = test_app.test_client()
+    first = token_for(c, "chi.sv@lms.test")
+    second = token_for(c, "chi.sv@lms.test")
+    assert first != second
+    assert c.get("/me", headers=headers(first)).status_code == 200
+    assert c.post("/auth/logout", headers=headers(first)).get_json() == {
+        "status": "logged_out"
+    }
+    assert_error(c.get("/me", headers=headers(first)), 401, "UNAUTHENTICATED")
+    assert_error(c.post("/auth/logout", headers=headers(first)), 401, "UNAUTHENTICATED")
+    assert c.get("/me", headers=headers(second)).status_code == 200
+
+
+@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+def test_logout_requires_authentication(tmp_path, backend):
+    c = rate_limit_client(tmp_path, backend, "logout_no_auth")
+    assert_error(c.post("/auth/logout"), 401, "UNAUTHENTICATED")
+
+
+def test_sqlite_logout_survives_app_restart(tmp_path):
+    config = {
+        "TESTING": True,
+        "JWT_SECRET": SECRET,
+        "AUDIT_LOG_PATH": str(tmp_path / "logout_restart.log"),
+        "LMS_STORE": "sqlite",
+        "SQLITE_PATH": str(tmp_path / "logout_restart.sqlite3"),
+        "BCRYPT_ROUNDS": 4,
+    }
+    first_app = create_app(config)
+    c = first_app.test_client()
+    token = token_for(c, "chi.sv@lms.test")
+    assert c.post("/auth/logout", headers=headers(token)).status_code == 200
+    second_app = create_app(config)
+    assert_error(
+        second_app.test_client().get("/me", headers=headers(token)),
+        401,
+        "UNAUTHENTICATED",
+    )
+
+
+@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+def test_rate_limit_window_expires(tmp_path, backend, monkeypatch):
+    import app.api.rate_limit as rate_limit_module
+
+    clock = [1000.0]
+    monkeypatch.setattr(rate_limit_module.time, "time", lambda: clock[0])
+
     c = rate_limit_client(tmp_path, backend, "expiry")
     email = "expiring@lms.test"
 
     for _ in range(3):
-        assert c.post("/auth/forgot-password", json={"email": email}).status_code == 202
+        response = c.post(
+            "/auth/forgot-password",
+            json={"email": email},
+        )
+        assert response.status_code == 202
 
     assert_error(
         c.post("/auth/forgot-password", json={"email": email}),
@@ -793,5 +1022,747 @@ def test_rate_limit_window_expires(tmp_path, backend, monkeypatch):
     )
 
     clock[0] += 901
-    response = c.post("/auth/forgot-password", json={"email": email})
+
+    response = c.post(
+        "/auth/forgot-password",
+        json={"email": email},
+    )
     assert response.status_code == 202
+
+
+@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+def test_account_lockout_dos_prevention(tmp_path, backend):
+    """A valid user can log in after repeated incorrect attempts."""
+
+    c = rate_limit_client(
+        tmp_path,
+        backend,
+        "account_lockout_dos",
+    )
+
+    email = "sec03-test@lms.test"
+    password = "SecurePassword123!"
+
+    # Create a test account.
+    register_response = c.post(
+        "/auth/register",
+        json={
+            "email": email,
+            "password": password,
+        },
+    )
+
+    assert register_response.status_code in (200, 201)
+
+    # Simulate five failed login attempts.
+    for _ in range(5):
+        response = c.post(
+            "/auth/login",
+            json={
+                "email": email,
+                "password": "wrong-password",
+            },
+        )
+
+        assert_error(
+            response,
+            401,
+            "INVALID_CREDENTIALS",
+        )
+
+    # Correct credentials must still work.
+    response = c.post(
+        "/auth/login",
+        json={
+            "email": email,
+            "password": password,
+        },
+    )
+
+    assert response.status_code == 200
+    assert "accessToken" in response.get_json()
+
+
+@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+def test_sec04_duplicate_registration(tmp_path, backend):
+    """Prevent duplicate account registration."""
+
+    c = rate_limit_client(tmp_path, backend, "sec04_duplicate")
+
+    payload = {
+        "email": "sec04-duplicate@lms.test",
+        "password": "SecurePassword123!",
+    }
+
+    first = c.post("/auth/register", json=payload)
+    assert first.status_code == 201
+
+    second = c.post("/auth/register", json=payload)
+    assert_error(second, 400, "VALIDATION_ERROR")
+
+
+@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+def test_sec04_concurrent_registration(tmp_path, backend):
+    """Concurrent registrations must not create duplicate accounts."""
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+
+    app = create_app(
+        {
+            "TESTING": True,
+            "JWT_SECRET": SECRET,
+            "ENABLE_EXTENSIONS": True,
+            "BCRYPT_ROUNDS": 4,
+            "LMS_STORE": backend,
+            "SQLITE_PATH": str(tmp_path / f"sec04_concurrent_{backend}.sqlite3"),
+            "AUDIT_LOG_PATH": str(tmp_path / f"sec04_concurrent_{backend}.log"),
+        }
+    )
+
+    # Two different IPs avoid exhausting the shared registration limit.
+    barrier = Barrier(2)
+
+    def register_user(index):
+        with app.test_client() as client:
+            barrier.wait(timeout=10)
+            response = client.post(
+                "/auth/register",
+                json={
+                    "email": "sec04-race@lms.test",
+                    "password": "SecurePassword123!",
+                },
+                environ_overrides={"REMOTE_ADDR": f"192.0.2.{index + 1}"},
+            )
+            return response.status_code, response.get_json()
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(register_user, range(2)))
+
+    statuses = sorted(status for status, _ in results)
+
+    assert statuses == [201, 400], results
+
+    store = app.extensions["lms_store"]
+
+    if isinstance(store, dict):
+        users = [
+            user
+            for user in store["users"].values()
+            if user["email"] == "sec04-race@lms.test"
+        ]
+        assert len(users) == 1
+    else:
+        assert store.find_user_by_email("sec04-race@lms.test") is not None
+
+
+@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+def test_sec04_registration_rate_limit(tmp_path, backend):
+    """Sixth registration request from the same IP must be blocked."""
+
+    c = rate_limit_client(tmp_path, backend, "sec04_rate_limit")
+
+    for index in range(5):
+        response = c.post(
+            "/auth/register",
+            json={
+                "email": f"sec04-limit-{index}@lms.test",
+                "password": "SecurePassword123!",
+            },
+        )
+        assert response.status_code == 201
+
+    response = c.post(
+        "/auth/register",
+        json={
+            "email": "sec04-limit-6@lms.test",
+            "password": "SecurePassword123!",
+        },
+    )
+
+    assert_error(response, 429, "RATE_LIMITED")
+    assert int(response.headers["Retry-After"]) > 0
+
+
+@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+def test_sec04_prevent_admin_registration(tmp_path, backend):
+    """Users must not assign themselves an ADMIN role."""
+
+    c = rate_limit_client(tmp_path, backend, "sec04_admin")
+
+    response = c.post(
+        "/auth/register",
+        json={
+            "email": "sec04-admin@lms.test",
+            "password": "SecurePassword123!",
+            "role": "ADMIN",
+        },
+    )
+
+    assert_error(response, 400, "VALIDATION_ERROR")
+
+
+@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+def test_sec04_concurrent_unique_accounts(tmp_path, backend):
+    """Concurrent registrations must create unique user IDs."""
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+
+    app = create_app(
+        {
+            "TESTING": True,
+            "JWT_SECRET": SECRET,
+            "ENABLE_EXTENSIONS": True,
+            "BCRYPT_ROUNDS": 4,
+            "LMS_STORE": backend,
+            "SQLITE_PATH": str(tmp_path / f"sec04_unique_{backend}.sqlite3"),
+            "AUDIT_LOG_PATH": str(tmp_path / f"sec04_unique_{backend}.log"),
+        }
+    )
+
+    count = 5
+    barrier = Barrier(count)
+
+    def register_user(index):
+        with app.test_client() as client:
+            barrier.wait(timeout=15)
+            response = client.post(
+                "/auth/register",
+                json={
+                    "email": f"sec04-unique-{index}@lms.test",
+                    "password": "SecurePassword123!",
+                },
+                environ_overrides={
+                    "REMOTE_ADDR": f"192.0.2.{index + 1}",
+                },
+            )
+            return response.status_code, response.get_json()
+
+    with ThreadPoolExecutor(max_workers=count) as executor:
+        results = list(executor.map(register_user, range(count)))
+
+    assert all(status == 201 for status, _ in results), results
+
+    user_ids = [body["id"] for _, body in results]
+
+    assert len(user_ids) == count
+    assert len(set(user_ids)) == count
+
+
+# ============================================================
+# SEC-05: ATOMIC PASSWORD RESET
+# ============================================================
+
+
+@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+def test_sec05_reset_success(tmp_path, backend):
+    """Successful reset must update password and consume token."""
+    import hashlib
+
+    import bcrypt
+
+    app = create_app(
+        {
+            "TESTING": True,
+            "JWT_SECRET": SECRET,
+            "BCRYPT_ROUNDS": 4,
+            "LMS_STORE": backend,
+            "SQLITE_PATH": str(tmp_path / f"sec05_success_{backend}.sqlite3"),
+            "AUDIT_LOG_PATH": str(tmp_path / f"sec05_success_{backend}.log"),
+            "RATE_LIMIT_DB_PATH": str(
+                tmp_path / f"sec05_success_{backend}_rate.sqlite3"
+            ),
+        }
+    )
+
+    store = app.extensions["lms_store"]
+
+    if isinstance(store, dict):
+        user = next(iter(store["users"].values()))
+        user_id = user["id"]
+        old_hash = user["password_hash"]
+        old_version = user["token_version"]
+    else:
+        with store._connect() as conn:
+            row = conn.execute("SELECT * FROM users LIMIT 1").fetchone()
+        user_id = row["id"]
+        old_hash = row["password_hash"]
+        old_version = row["token_version"]
+
+    token = "sec05-success-token"
+    token_hash = hashlib.sha256(token.encode()).hexdigest()
+
+    if isinstance(store, dict):
+        import time
+
+        app.extensions["lms_reset_tokens"][token_hash] = (user_id, time.time() + 900)
+    else:
+        store.add_reset_token(token_hash, user_id, 900)
+
+    with app.test_client() as client:
+        response = client.post(
+            "/auth/reset-password",
+            json={"token": token, "password": "NewSecurePassword123!"},
+        )
+
+    assert response.status_code == 200, response.get_json()
+
+    if isinstance(store, dict):
+        updated = store["users"][user_id]
+        assert updated["token_version"] == old_version + 1
+        assert updated["password_hash"] != old_hash
+        assert token_hash not in app.extensions["lms_reset_tokens"]
+    else:
+        updated = store.get_user(user_id)
+        assert updated.token_version == old_version + 1
+        assert updated.password_hash != old_hash
+
+        with store._connect() as conn:
+            remaining = conn.execute(
+                "SELECT 1 FROM reset_tokens WHERE token = ?",
+                (token_hash,),
+            ).fetchone()
+
+        assert remaining is None
+
+    # This section runs for BOTH Memory and SQLite.
+    stored_hash = (
+        updated["password_hash"] if isinstance(updated, dict) else updated.password_hash
+    )
+
+    assert bcrypt.checkpw(
+        b"NewSecurePassword123!",
+        stored_hash.encode("utf-8"),
+    )
+
+
+@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+def test_sec05_hash_failure_keeps_token(tmp_path, backend, monkeypatch):
+    """Hashing failure must not consume the reset token."""
+    import hashlib
+    import time
+
+    import app.api.reset as reset_module
+
+    app = create_app(
+        {
+            "TESTING": True,
+            "JWT_SECRET": SECRET,
+            "BCRYPT_ROUNDS": 4,
+            "LMS_STORE": backend,
+            "SQLITE_PATH": str(tmp_path / f"sec05_hash_{backend}.sqlite3"),
+            "RATE_LIMIT_DB_PATH": str(tmp_path / f"sec05_hash_{backend}_rate.sqlite3"),
+        }
+    )
+    store = app.extensions["lms_store"]
+
+    if isinstance(store, dict):
+        user = next(iter(store["users"].values()))
+        user_id = user["id"]
+        old_hash = user["password_hash"]
+    else:
+        with store._connect() as conn:
+            row = conn.execute("SELECT * FROM users LIMIT 1").fetchone()
+        user_id = row["id"]
+        old_hash = row["password_hash"]
+
+    token = "sec05-hash-failure-token"
+    token_hash = hashlib.sha256(token.encode()).hexdigest()
+
+    if isinstance(store, dict):
+        app.extensions["lms_reset_tokens"][token_hash] = (
+            user_id,
+            time.time() + 900,
+        )
+    else:
+        store.add_reset_token(token_hash, user_id, 900)
+
+    def fail_hash(*args, **kwargs):
+        raise RuntimeError("Simulated bcrypt failure")
+
+    monkeypatch.setattr(reset_module, "hash_password", fail_hash)
+
+    # Flask converts the simulated exception into HTTP 500.
+    with app.test_client() as client:
+        response = client.post(
+            "/auth/reset-password",
+            json={
+                "token": token,
+                "password": "NewSecurePassword123!",
+            },
+        )
+
+    assert response.status_code == 500
+
+    # Verify token and password remain unchanged.
+    if isinstance(store, dict):
+        assert token_hash in app.extensions["lms_reset_tokens"]
+        assert store["users"][user_id]["password_hash"] == old_hash
+    else:
+        with store._connect() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM reset_tokens WHERE token = ?",
+                (token_hash,),
+            ).fetchone()
+
+        assert row is not None
+        assert store.get_user(user_id).password_hash == old_hash
+
+
+@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+def test_sec05_token_cannot_be_reused(tmp_path, backend):
+    """A successfully consumed token cannot reset password twice."""
+    import hashlib
+    import time
+
+    app = create_app(
+        {
+            "TESTING": True,
+            "JWT_SECRET": SECRET,
+            "BCRYPT_ROUNDS": 4,
+            "LMS_STORE": backend,
+            "SQLITE_PATH": str(tmp_path / f"sec05_reuse_{backend}.sqlite3"),
+            "RATE_LIMIT_DB_PATH": str(tmp_path / f"sec05_reuse_{backend}_rate.sqlite3"),
+        }
+    )
+    store = app.extensions["lms_store"]
+
+    if isinstance(store, dict):
+        user_id = next(iter(store["users"]))
+    else:
+        with store._connect() as conn:
+            user_id = conn.execute("SELECT id FROM users LIMIT 1").fetchone()["id"]
+
+    token = "sec05-reuse-token"
+    token_hash = hashlib.sha256(token.encode()).hexdigest()
+
+    if isinstance(store, dict):
+        app.extensions["lms_reset_tokens"][token_hash] = (user_id, time.time() + 900)
+    else:
+        store.add_reset_token(token_hash, user_id, 900)
+
+    with app.test_client() as client:
+        first = client.post(
+            "/auth/reset-password",
+            json={"token": token, "password": "FirstSecurePassword123!"},
+        )
+        second = client.post(
+            "/auth/reset-password",
+            json={"token": token, "password": "SecondSecurePassword123!"},
+        )
+
+    assert first.status_code == 200
+    assert_error(second, 400, "VALIDATION_ERROR")
+
+
+@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+def test_sec05_concurrent_reset(tmp_path, backend):
+    """Only one concurrent request may consume a reset token."""
+    import hashlib
+    import time
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+
+    app = create_app(
+        {
+            "TESTING": True,
+            "JWT_SECRET": SECRET,
+            "BCRYPT_ROUNDS": 4,
+            "LMS_STORE": backend,
+            "SQLITE_PATH": str(tmp_path / f"sec05_race_{backend}.sqlite3"),
+            "RATE_LIMIT_DB_PATH": str(tmp_path / f"sec05_race_{backend}_rate.sqlite3"),
+        }
+    )
+    store = app.extensions["lms_store"]
+
+    if isinstance(store, dict):
+        user_id = next(iter(store["users"]))
+    else:
+        with store._connect() as conn:
+            user_id = conn.execute("SELECT id FROM users LIMIT 1").fetchone()["id"]
+
+    token = "sec05-concurrent-token"
+    token_hash = hashlib.sha256(token.encode()).hexdigest()
+
+    if isinstance(store, dict):
+        app.extensions["lms_reset_tokens"][token_hash] = (user_id, time.time() + 900)
+    else:
+        store.add_reset_token(token_hash, user_id, 900)
+
+    barrier = Barrier(2)
+
+    def reset_worker(index):
+        with app.test_client() as client:
+            barrier.wait(timeout=10)
+            response = client.post(
+                "/auth/reset-password",
+                json={"token": token, "password": "NewSecurePassword123!"},
+                environ_overrides={"REMOTE_ADDR": f"192.0.2.{index + 1}"},
+            )
+            return response.status_code
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        statuses = sorted(executor.map(reset_worker, range(2)))
+
+    assert statuses == [200, 400], statuses
+
+
+def test_sec05_sqlite_rollback_on_token_delete_failure(tmp_path):
+    """SQLite must roll back password update if token deletion fails."""
+    import hashlib
+    import sqlite3
+
+    app = create_app(
+        {
+            "TESTING": True,
+            "JWT_SECRET": SECRET,
+            "BCRYPT_ROUNDS": 4,
+            "LMS_STORE": "sqlite",
+            "SQLITE_PATH": str(tmp_path / "sec05_rollback.sqlite3"),
+            "RATE_LIMIT_DB_PATH": str(tmp_path / "sec05_rollback_rate.sqlite3"),
+            "AUDIT_LOG_PATH": str(tmp_path / "sec05_rollback.log"),
+        }
+    )
+
+    store = app.extensions["lms_store"]
+
+    # 1. Select a user and save original credentials.
+    with store._connect() as conn:
+        user = conn.execute(
+            "SELECT id, password_hash, token_version FROM users LIMIT 1"
+        ).fetchone()
+
+    assert user is not None
+
+    user_id = user["id"]
+    old_hash = user["password_hash"]
+    old_version = user["token_version"]
+
+    # 2. Create a valid password reset token.
+    token = "sec05-rollback-test-token"
+    token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+    store.add_reset_token(token_hash, user_id, 900)
+
+    # 3. Simulate a SQLite failure during token deletion.
+    with sqlite3.connect(app.config["SQLITE_PATH"]) as conn:
+        conn.execute(
+            """
+            CREATE TRIGGER sec05_fail_token_delete
+            BEFORE DELETE ON reset_tokens
+            BEGIN
+                SELECT RAISE(ABORT, 'Simulated token deletion failure');
+            END;
+            """
+        )
+
+    # 4. Attempt password reset.
+    with app.test_client() as client:
+        response = client.post(
+            "/auth/reset-password",
+            json={
+                "token": token,
+                "password": "NewSecurePassword123!",
+            },
+            environ_overrides={"REMOTE_ADDR": "192.0.2.55"},
+        )
+
+    assert response.status_code == 500
+
+    # 5. Verify that the entire transaction was rolled back.
+    with store._connect() as conn:
+        updated_user = conn.execute(
+            """
+            SELECT password_hash, token_version
+            FROM users
+            WHERE id = ?
+            """,
+            (user_id,),
+        ).fetchone()
+
+        remaining_token = conn.execute(
+            "SELECT token FROM reset_tokens WHERE token = ?",
+            (token_hash,),
+        ).fetchone()
+
+    assert updated_user is not None
+
+    # Password must remain unchanged.
+    assert updated_user["password_hash"] == old_hash
+
+    # JWT token version must remain unchanged.
+    assert updated_user["token_version"] == old_version
+
+    # Reset token must still exist.
+    assert remaining_token is not None
+
+    # 6. Remove simulated database failure.
+    with sqlite3.connect(app.config["SQLITE_PATH"]) as conn:
+        conn.execute("DROP TRIGGER sec05_fail_token_delete")
+
+    # 7. Retry with the same token after database recovery.
+    with app.test_client() as client:
+        retry = client.post(
+            "/auth/reset-password",
+            json={
+                "token": token,
+                "password": "NewSecurePassword123!",
+            },
+            environ_overrides={"REMOTE_ADDR": "192.0.2.56"},
+        )
+
+    assert retry.status_code == 200, retry.get_json()
+
+    # 8. Verify successful update and token consumption.
+    with store._connect() as conn:
+        final_user = conn.execute(
+            """
+            SELECT password_hash, token_version
+            FROM users
+            WHERE id = ?
+            """,
+            (user_id,),
+        ).fetchone()
+
+        final_token = conn.execute(
+            "SELECT token FROM reset_tokens WHERE token = ?",
+            (token_hash,),
+        ).fetchone()
+
+    assert final_user["password_hash"] != old_hash
+    assert final_user["token_version"] == old_version + 1
+    assert final_token is None
+
+
+# ============================================================
+# SEC-06: FORGOT-PASSWORD ACCOUNT ENUMERATION
+# ============================================================
+
+
+@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+def test_sec06_generic_forgot_response(tmp_path, backend):
+    """Existing and unknown emails must receive the same response."""
+    app = create_app(
+        {
+            "TESTING": True,
+            "JWT_SECRET": SECRET,
+            "BCRYPT_ROUNDS": 4,
+            "LMS_STORE": backend,
+            "RESET_TOKEN_ECHO": False,
+            "SQLITE_PATH": str(tmp_path / f"sec06_generic_{backend}.sqlite3"),
+            "RATE_LIMIT_DB_PATH": str(
+                tmp_path / f"sec06_generic_{backend}_rate.sqlite3"
+            ),
+        }
+    )
+
+    store = app.extensions["lms_store"]
+
+    if isinstance(store, dict):
+        existing_email = next(iter(store["users"].values()))["email"]
+    else:
+        with store._connect() as conn:
+            existing_email = conn.execute("SELECT email FROM users LIMIT 1").fetchone()[
+                "email"
+            ]
+
+    with app.test_client() as client:
+        existing = client.post(
+            "/auth/forgot-password",
+            json={"email": existing_email},
+        )
+
+        unknown = client.post(
+            "/auth/forgot-password",
+            json={"email": "sec06-unknown@example.com"},
+        )
+
+    assert existing.status_code == 202
+    assert unknown.status_code == 202
+    assert existing.get_json() == unknown.get_json()
+    assert existing.get_json() == {"status": "sent"}
+
+
+@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+def test_sec06_equal_email_rate_limits(tmp_path, backend):
+    """Existing and unknown emails must share the same rate-limit policy."""
+    app = create_app(
+        {
+            "TESTING": True,
+            "JWT_SECRET": SECRET,
+            "BCRYPT_ROUNDS": 4,
+            "LMS_STORE": backend,
+            "RESET_TOKEN_ECHO": False,
+            "SQLITE_PATH": str(tmp_path / f"sec06_limit_{backend}.sqlite3"),
+            "RATE_LIMIT_DB_PATH": str(tmp_path / f"sec06_limit_{backend}_rate.sqlite3"),
+        }
+    )
+
+    store = app.extensions["lms_store"]
+
+    if isinstance(store, dict):
+        existing_email = next(iter(store["users"].values()))["email"]
+    else:
+        with store._connect() as conn:
+            existing_email = conn.execute("SELECT email FROM users LIMIT 1").fetchone()[
+                "email"
+            ]
+
+    emails = [
+        existing_email,
+        "sec06-unknown@example.com",
+    ]
+
+    with app.test_client() as client:
+        for index, email in enumerate(emails):
+            statuses = []
+
+            for _ in range(4):
+                response = client.post(
+                    "/auth/forgot-password",
+                    json={"email": email},
+                    environ_overrides={"REMOTE_ADDR": f"192.0.2.{index + 10}"},
+                )
+
+                statuses.append(response.status_code)
+
+            assert statuses == [202, 202, 202, 429]
+            assert response.get_json() == {"error": "RATE_LIMITED"}
+            assert int(response.headers["Retry-After"]) > 0
+
+
+@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+def test_sec06_no_token_echo_in_production(tmp_path, backend):
+    """Production responses must never expose reset tokens."""
+    app = create_app(
+        {
+            "TESTING": False,
+            "JWT_SECRET": SECRET,
+            "BCRYPT_ROUNDS": 4,
+            "LMS_STORE": backend,
+            "RESET_TOKEN_ECHO": True,
+            "SQLITE_PATH": str(tmp_path / f"sec06_production_{backend}.sqlite3"),
+            "RATE_LIMIT_DB_PATH": str(
+                tmp_path / f"sec06_production_{backend}_rate.sqlite3"
+            ),
+        }
+    )
+
+    store = app.extensions["lms_store"]
+
+    if isinstance(store, dict):
+        existing_email = next(iter(store["users"].values()))["email"]
+    else:
+        with store._connect() as conn:
+            existing_email = conn.execute("SELECT email FROM users LIMIT 1").fetchone()[
+                "email"
+            ]
+
+    with app.test_client() as client:
+        response = client.post(
+            "/auth/forgot-password",
+            json={"email": existing_email},
+        )
+
+    assert response.status_code == 202
+    assert response.get_json() == {"status": "sent"}
+    assert "resetToken" not in response.get_json()

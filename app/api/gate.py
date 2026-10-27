@@ -7,13 +7,41 @@ Supports:
 - Public pages and authentication endpoints.
 - JWT signature and expiration verification.
 - JWT token versioning.
-- Automatic rejection of old JWTs after password reset.
+- Rejection of old JWTs after password reset.
+- JWT revocation checking for server-side logout.
+- Public favicon and static assets.
 """
+
+from __future__ import annotations
 
 from flask import current_app, g, request
 
 from app.api.auth import verify_token
 from app.api.errors import Unauthenticated
+
+# ============================================================
+# JWT REVOCATION CHECK
+# ============================================================
+
+
+def is_token_revoked(jti: str) -> bool:
+    """Check whether a JWT has been revoked."""
+
+    store = current_app.extensions["lms_store"]
+
+    if isinstance(store, dict):
+        revoked_tokens = current_app.extensions.get(
+            "lms_revoked_tokens",
+            {},
+        )
+        return jti in revoked_tokens
+
+    return store.is_token_revoked(jti)
+
+
+# ============================================================
+# AUTHENTICATION GATE
+# ============================================================
 
 
 def register_gate(app):
@@ -22,48 +50,38 @@ def register_gate(app):
     @app.before_request
     def authentication_gate():
         # ====================================================
-        # STEP 1: PUBLIC PAGE ROUTES
+        # STEP 1: PUBLIC ROUTES
         # ====================================================
 
-        public_page_routes = {
-            ("GET", "/"),
-            ("GET", "/login"),
-            ("GET", "/register"),
-            ("GET", "/resetpassword"),
+        public_pages = {
+            "/",
+            "/login",
+            "/register",
+            "/resetpassword",
+            "/account",
         }
 
-        public_api_routes = {
-            ("POST", "/auth/register"),
-            ("POST", "/auth/forgot-password"),
-            ("POST", "/auth/reset-password"),
+        public_apis = {
+            "/auth/login",
+            "/auth/register",
+            "/auth/forgot-password",
+            "/auth/reset-password",
         }
 
-        # Login does not require an existing JWT.
-        if request.method == "POST" and request.path == "/auth/login":
+        # Public frontend pages.
+        if request.method == "GET" and request.path in public_pages:
             return
 
-        # Allow public frontend pages.
-        if (request.method, request.path) in public_page_routes:
+        # Public authentication APIs.
+        if request.method == "POST" and request.path in public_apis:
             return
 
-        # Allow registration and password reset APIs.
-        if (request.method, request.path) in public_api_routes:
-            return
-
-        # Account page is public only when extensions
-        # are enabled.
-        if (
-            current_app.config.get(
-                "ENABLE_EXTENSIONS",
-                False,
-            )
-            and request.method == "GET"
-            and request.path == "/account"
-        ):
-            return
-
-        # Allow Flask static resources.
+        # Static files.
         if request.endpoint == "static":
+            return
+
+        # Browser favicon request.
+        if request.method == "GET" and request.path == "/favicon.ico":
             return
 
         # ====================================================
@@ -77,7 +95,7 @@ def register_gate(app):
 
         parts = authorization.split()
 
-        if len(parts) != 2 or parts[0] != "Bearer":
+        if len(parts) != 2 or parts[0].lower() != "bearer":
             raise Unauthenticated()
 
         token = parts[1]
@@ -103,23 +121,26 @@ def register_gate(app):
             raise Unauthenticated()
 
         # ====================================================
-        # STEP 5: VERIFY JWT TOKEN VERSION
+        # STEP 5: VERIFY TOKEN VERSION
         # ====================================================
 
         if isinstance(user, dict):
-            current_version = user.get(
-                "token_version",
-                0,
-            )
+            current_version = user.get("token_version", 0)
         else:
             current_version = user.token_version
 
-        # Reject tokens issued before password reset.
         if payload["ver"] != current_version:
             raise Unauthenticated()
 
         # ====================================================
-        # STEP 6: SET AUTHENTICATED ACTOR
+        # STEP 6: VERIFY REVOCATION
+        # ====================================================
+
+        if is_token_revoked(payload["jti"]):
+            raise Unauthenticated()
+
+        # ====================================================
+        # STEP 7: SET ACTOR
         # ====================================================
 
         if isinstance(user, dict):
@@ -134,3 +155,7 @@ def register_gate(app):
                 "email": user.email,
                 "role": user.role,
             }
+
+        g.jwt_payload = payload
+
+        return

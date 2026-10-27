@@ -54,6 +54,11 @@ CREATE TABLE IF NOT EXISTS attempts (
     locked_until REAL NOT NULL DEFAULT 0
 );
 
+CREATE TABLE IF NOT EXISTS revoked_jwts (
+    jti TEXT PRIMARY KEY,
+    expires_at INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS reset_tokens (
     token TEXT PRIMARY KEY,
     user_id TEXT NOT NULL,
@@ -243,12 +248,14 @@ class SqliteStore:
         password_hash: str,
         role: str,
     ) -> User:
+        """Create a user with a collision-resistant ID."""
+
+        import uuid
+
+        user_id = f"u{uuid.uuid4().hex}"
+        normalized_email = email.strip().lower()
 
         with self._lock, self._connect() as conn:
-            total = conn.execute("SELECT COUNT(*) AS n FROM users").fetchone()["n"]
-
-            user_id = f"u{100 + int(total)}"
-
             conn.execute(
                 """
                 INSERT INTO users (
@@ -262,7 +269,7 @@ class SqliteStore:
                 """,
                 (
                     user_id,
-                    email.strip().lower(),
+                    normalized_email,
                     role.upper(),
                     password_hash,
                 ),
@@ -270,7 +277,7 @@ class SqliteStore:
 
         return User(
             id=user_id,
-            email=email.strip().lower(),
+            email=normalized_email,
             role=role.upper(),
             password_hash=password_hash,
             token_version=0,
@@ -302,6 +309,55 @@ class SqliteStore:
 
             if cursor.rowcount != 1:
                 raise ValueError("User not found")
+
+    def reset_password_atomic(
+        self,
+        token_hash: str,
+        password_hash: str,
+    ) -> str | None:
+        """Atomically reset password and consume reset token."""
+
+        with self._lock, self._connect() as conn:
+            # Acquire the write lock before reading the token.
+            conn.execute("BEGIN IMMEDIATE")
+
+            row = conn.execute(
+                """
+                SELECT user_id
+                FROM reset_tokens
+                WHERE token = ?
+                  AND expires_at > ?
+                """,
+                (token_hash, time.time()),
+            ).fetchone()
+
+            if row is None:
+                return None
+
+            user_id = str(row["user_id"])
+
+            cursor = conn.execute(
+                """
+                UPDATE users
+                SET password_hash = ?,
+                    token_version = token_version + 1
+                WHERE id = ?
+                """,
+                (password_hash, user_id),
+            )
+
+            if cursor.rowcount != 1:
+                raise ValueError("Reset token references missing user")
+
+            cursor = conn.execute(
+                "DELETE FROM reset_tokens WHERE token = ?",
+                (token_hash,),
+            )
+
+            if cursor.rowcount != 1:
+                raise RuntimeError("Failed to consume reset token")
+
+            return user_id
 
     # ========================================================
     # COURSE MANAGEMENT
@@ -443,6 +499,32 @@ class SqliteStore:
                     attempt.locked_until,
                 ),
             )
+
+    # ========================================================
+    # JWT REVOCATION
+    # ========================================================
+
+    def revoke_token(self, jti: str, expires_at: int) -> None:
+        """Persist a revoked JWT until its expiration."""
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                "DELETE FROM revoked_jwts WHERE expires_at <= ?", (int(time.time()),)
+            )
+            conn.execute(
+                "INSERT OR IGNORE INTO revoked_jwts (jti, expires_at) VALUES (?, ?)",
+                (jti, expires_at),
+            )
+
+    def is_token_revoked(self, jti: str) -> bool:
+        """Return whether an unexpired revoked JWT exists."""
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                "DELETE FROM revoked_jwts WHERE expires_at <= ?", (int(time.time()),)
+            )
+            row = conn.execute(
+                "SELECT 1 FROM revoked_jwts WHERE jti = ?", (jti,)
+            ).fetchone()
+        return row is not None
 
     # ========================================================
     # RESET TOKENS

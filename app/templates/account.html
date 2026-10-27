@@ -11,8 +11,7 @@
         <h1>Trang tài khoản</h1>
 
         <p class="sub">
-            Xin chào <strong id="who">…</strong>.
-            Dữ liệu được lấy từ API bằng Bearer token.
+            Xin chào! <strong id="who">…</strong>.
         </p>
 
         <dl>
@@ -118,37 +117,4 @@
     </section>
 
 </div>
-{% endblock %}
-
-{% block scripts %}
-<script>
-    document.addEventListener("DOMContentLoaded", function () {
-        if (typeof loadAccount === "function") {
-            loadAccount();
-        }
-
-        const forgotFormElement = document.getElementById("forgot-form");
-        const resetFormElement = document.getElementById("reset-form");
-
-        if (forgotFormElement) {
-            forgotFormElement.addEventListener("submit", function (event) {
-                event.preventDefault();
-
-                if (typeof forgotForm === "function") {
-                    forgotForm();
-                }
-            });
-        }
-
-        if (resetFormElement) {
-            resetFormElement.addEventListener("submit", function (event) {
-                event.preventDefault();
-
-                if (typeof resetForm === "function") {
-                    resetForm();
-                }
-            });
-        }
-    });
-</script>
 {% endblock %}

@@ -1,6 +1,8 @@
 
+'use strict';
+
 // ==========================================
-// MINILMS - MAIN JAVASCRIPT
+// MINILMS - MAIN JAVASCRIPT (SEC-07)
 // ==========================================
 
 const $ = (id) => document.getElementById(id);
@@ -11,13 +13,13 @@ const token = () => sessionStorage.getItem(TOKEN_KEY);
 
 
 // ==========================================
-// HIỂN THỊ THÔNG BÁO
+// HIỂN THỊ THÔNG BÁO AN TOÀN
 // ==========================================
 
 function flash(element, message, ok = true) {
     if (!element) return;
 
-    element.textContent = message;
+    element.textContent = String(message ?? '');
     element.className = 'msg show ' + (ok ? 'ok' : 'err');
 }
 
@@ -110,6 +112,9 @@ function translate(code) {
         INVALID_RESPONSE:
             'Phản hồi từ máy chủ không hợp lệ.',
 
+        RATE_LIMITED:
+            'Bạn đã gửi quá nhiều yêu cầu. Vui lòng thử lại sau.',
+
         'HTTP 400':
             'Yêu cầu không hợp lệ.',
 
@@ -122,11 +127,16 @@ function translate(code) {
         'HTTP 404':
             'Không tìm thấy API được yêu cầu.',
 
+        'HTTP 429':
+            'Bạn đã gửi quá nhiều yêu cầu.',
+
         'HTTP 500':
             'Máy chủ đang gặp lỗi.'
     };
 
-    return messages[code] || code || 'Đã xảy ra lỗi.';
+    return Object.hasOwn(messages, code)
+        ? messages[code]
+        : code || 'Đã xảy ra lỗi.';
 }
 
 
@@ -137,17 +147,14 @@ function translate(code) {
 function updateNavigation() {
     const isLoggedIn = Boolean(token());
 
-    // Menu dành cho khách
     document.querySelectorAll('.guest-only').forEach((element) => {
         element.hidden = isLoggedIn;
     });
 
-    // Menu dành cho người đã đăng nhập
     document.querySelectorAll('.auth-only').forEach((element) => {
         element.hidden = !isLoggedIn;
     });
 
-    // Nút đăng xuất
     const logoutLink = $('logout-link');
 
     if (
@@ -168,12 +175,35 @@ function updateNavigation() {
 // ĐĂNG XUẤT
 // ==========================================
 
-function logout() {
-    sessionStorage.removeItem(TOKEN_KEY);
+let logoutInProgress = false;
 
-    updateNavigation();
+async function logout() {
+    if (logoutInProgress) return;
 
-    window.location.assign('/');
+    logoutInProgress = true;
+    const accessToken = token();
+
+    try {
+        if (accessToken) {
+            await api('/auth/logout', {
+                method: 'POST',
+                auth: true
+            });
+        }
+    } catch (error) {
+        // Không ghi JWT vào console.
+        console.warn(
+            'Server-side logout could not be confirmed:',
+            error.message
+        );
+    } finally {
+        if (token() === accessToken) {
+            sessionStorage.removeItem(TOKEN_KEY);
+        }
+
+        updateNavigation();
+        window.location.assign('/');
+    }
 }
 
 
@@ -224,10 +254,11 @@ async function loginForm(event) {
             throw new Error('INVALID_RESPONSE');
         }
 
-        // Lưu JWT
         sessionStorage.setItem(TOKEN_KEY, accessToken);
 
-        // Cập nhật header
+        // Không giữ mật khẩu trong input sau khi đăng nhập.
+        passwordInput.value = '';
+
         updateNavigation();
 
         flash(
@@ -235,7 +266,6 @@ async function loginForm(event) {
             'Đăng nhập thành công, đang chuyển trang.'
         );
 
-        // Chuyển đến trang tài khoản
         window.location.assign('/account');
 
     } catch (error) {
@@ -274,6 +304,12 @@ async function registerForm(event) {
             }
         });
 
+        const passwordInput = $('reg-password');
+
+        if (passwordInput) {
+            passwordInput.value = '';
+        }
+
         flash(
             messageBox,
             'Đã tạo tài khoản thành công. Mời đăng nhập.'
@@ -308,15 +344,18 @@ async function forgotForm(event) {
             }
         });
 
-        if (data?.resetToken && $('reset-token')) {
+        // Chỉ hỗ trợ token demo khi backend test trả về.
+        if (
+            typeof data?.resetToken === 'string' &&
+            $('reset-token')
+        ) {
             $('reset-token').value = data.resetToken;
         }
 
+        // Không hiển thị token reset trong thông báo.
         flash(
             messageBox,
-            data?.resetToken
-                ? 'Token reset (demo): ' + data.resetToken
-                : 'Nếu email tồn tại, hướng dẫn đặt lại mật khẩu đã được gửi.'
+            'Nếu email tồn tại, hướng dẫn đặt lại mật khẩu đã được gửi.'
         );
 
     } catch (error) {
@@ -348,6 +387,17 @@ async function resetForm(event) {
                 password: $('reset-new')?.value
             }
         });
+
+        const passwordInput = $('reset-new');
+        const tokenInput = $('reset-token');
+
+        if (passwordInput) {
+            passwordInput.value = '';
+        }
+
+        if (tokenInput) {
+            tokenInput.value = '';
+        }
 
         flash(
             messageBox,
@@ -418,7 +468,6 @@ async function loadAccount() {
         return;
     }
 
-    // Tải điểm riêng để không ảnh hưởng thông tin tài khoản
     try {
         await loadGrades();
     } catch (error) {
@@ -468,6 +517,7 @@ async function loadGrades() {
                 ]) {
                     const td = document.createElement('td');
 
+                    // Không diễn giải dữ liệu API thành HTML.
                     td.textContent = value ?? '';
                     tr.appendChild(td);
                 }
@@ -501,8 +551,56 @@ async function loadGrades() {
 
 
 // ==========================================
-// HIỆN / ẨN MẬT KHẨU
+// HIỆN / ẨN MẬT KHẨU - KHÔNG DÙNG innerHTML
 // ==========================================
+
+const SVG_NS = 'http://www.w3.org/2000/svg';
+
+function createSvgElement(tag, attributes = {}) {
+    const element = document.createElementNS(SVG_NS, tag);
+
+    for (const [name, value] of Object.entries(attributes)) {
+        element.setAttribute(name, String(value));
+    }
+
+    return element;
+}
+
+function updateEyeIcon(eyeIcon, showPassword) {
+    const elements = [];
+
+    if (!showPassword) {
+        // Biểu tượng mắt mở.
+        elements.push(
+            createSvgElement('path', {
+                d: 'M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7z'
+            }),
+            createSvgElement('circle', {
+                cx: '12',
+                cy: '12',
+                r: '3'
+            })
+        );
+    } else {
+        // Biểu tượng mắt có gạch chéo.
+        elements.push(
+            createSvgElement('path', {
+                d: 'M3 3l18 18'
+            }),
+            createSvgElement('path', {
+                d: 'M10.6 10.6a2 2 0 0 0 2.8 2.8'
+            }),
+            createSvgElement('path', {
+                d: 'M9.9 5.2A10.9 10.9 0 0 1 12 5c5 0 9 4 10 7a13.7 13.7 0 0 1-3 4.2'
+            }),
+            createSvgElement('path', {
+                d: 'M6.3 6.3C4.3 7.6 2.8 9.5 2 12c1 3 5 7 10 7 1.5 0 2.9-.3 4.2-.9'
+            })
+        );
+    }
+
+    eyeIcon.replaceChildren(...elements);
+}
 
 function initPasswordToggle() {
     const passwordInput = $('password');
@@ -519,25 +617,11 @@ function initPasswordToggle() {
 
     toggleButton.dataset.initialized = 'true';
 
-    // Con mắt không gạch
-    const eyeOpen = `
-        <path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7z"/>
-        <circle cx="12" cy="12" r="3"/>
-    `;
-
-    // Con mắt có gạch chéo
-    const eyeClosed = `
-        <path d="M3 3l18 18"/>
-        <path d="M10.6 10.6a2 2 0 0 0 2.8 2.8"/>
-        <path d="M9.9 5.2A10.9 10.9 0 0 1 12 5c5 0 9 4 10 7a13.7 13.7 0 0 1-3 4.2"/>
-        <path d="M6.3 6.3C4.3 7.6 2.8 9.5 2 12c1 3 5 7 10 7 1.5 0 2.9-.3 4.2-.9"/>
-    `;
-
-    // Mặc định: mật khẩu ẩn, mắt không gạch
-    eyeIcon.innerHTML =
-        passwordInput.type === 'password'
-            ? eyeOpen
-            : eyeClosed;
+    // Giữ nguyên quy ước biểu tượng của giao diện cũ.
+    updateEyeIcon(
+        eyeIcon,
+        passwordInput.type === 'text'
+    );
 
     toggleButton.addEventListener('click', function () {
         const showPassword =
@@ -547,12 +631,7 @@ function initPasswordToggle() {
             ? 'text'
             : 'password';
 
-        // Theo yêu cầu:
-        // Ẩn mật khẩu -> mắt không gạch
-        // Hiện mật khẩu -> mắt có gạch
-        eyeIcon.innerHTML = showPassword
-            ? eyeClosed
-            : eyeOpen;
+        updateEyeIcon(eyeIcon, showPassword);
 
         const label = showPassword
             ? 'Ẩn mật khẩu'
@@ -575,6 +654,30 @@ function initPasswordToggle() {
 function initApp() {
     updateNavigation();
     initPasswordToggle();
+
+    const loginFormElement = $('login-form');
+    if (loginFormElement) {
+        loginFormElement.addEventListener('submit', loginForm);
+    }
+
+    const registerFormElement = $('register-form');
+    if (registerFormElement) {
+        registerFormElement.addEventListener('submit', registerForm);
+    }
+
+    const forgotFormElement = $('forgot-form');
+    if (forgotFormElement) {
+        forgotFormElement.addEventListener('submit', forgotForm);
+    }
+
+    const resetFormElement = $('reset-form');
+    if (resetFormElement) {
+        resetFormElement.addEventListener('submit', resetForm);
+    }
+
+    if ($('me-id')) {
+        loadAccount();
+    }
 }
 
 if (document.readyState === 'loading') {

@@ -1,4 +1,5 @@
 import json
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -74,4 +75,5 @@ def load_seed():
         "courses": courses,
         "enrollments": enrollments,
         "failed_logins": {},
+        "registration_lock": threading.Lock(),
     }
