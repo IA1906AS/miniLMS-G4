@@ -94,7 +94,8 @@
             <a href="{{ url_for('auth.account') }}">
                 Tài khoản
             </a>
-
+    <!-- Flask CSRF is validated by check_csrf() in auth.logout -->
+    <!-- nosemgrep: python.django.security.django-no-csrf-token.django-no-csrf-token -->
             <form method="post"
                   action="{{ url_for('auth.logout') }}">
                 <input type="hidden"

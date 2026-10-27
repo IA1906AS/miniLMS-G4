@@ -1,0 +1,36 @@
+
+name: Semgrep Security Scan
+
+on:
+  push:
+    branches:
+      - Ly
+
+  pull_request:
+    branches:
+      - main
+
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  semgrep:
+    name: Semgrep SAST
+    runs-on: ubuntu-latest
+
+    container:
+      image: semgrep/semgrep
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run Semgrep Security Scan
+        run: |
+          semgrep scan \
+            --config auto \
+            --exclude-rule python.django.security.django-no-csrf-token.django-no-csrf-token \
+            --error \
+            app web src

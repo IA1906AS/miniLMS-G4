@@ -20,8 +20,18 @@ from web.db import get_db
 reset_bp = Blueprint("password_reset", __name__)
 
 
+# =========================================
+# 1. HASH RESET TOKEN
+# =========================================
+
+
 def hash_token(token):
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+# =========================================
+# 2. FORGOT PASSWORD
+# =========================================
 
 
 @reset_bp.route("/forgot-password", methods=["GET", "POST"])
@@ -35,14 +45,20 @@ def forgot_password():
             db = get_db()
 
             user = db.execute(
-                "SELECT id FROM users WHERE email = ?", (email,)
+                """
+                SELECT id
+                FROM users
+                WHERE email = ?
+                """,
+                (email,),
             ).fetchone()
 
             if user is not None:
+                # Tao token ngau nhien
                 token = secrets.token_urlsafe(32)
                 now = int(time.time())
 
-                # Huy cac token cu
+                # Huy cac token reset cu
                 db.execute(
                     """
                     UPDATE password_reset_tokens
@@ -53,7 +69,7 @@ def forgot_password():
                     (now, user["id"]),
                 )
 
-                # Luu HASH cua token, khong luu token goc
+                # Luu hash cua token vao SQLite
                 db.execute(
                     """
                     INSERT INTO password_reset_tokens
@@ -69,12 +85,30 @@ def forgot_password():
 
                 db.commit()
 
-                # Chi hien link trong terminal khi demo local
+                # =====================================
+                # SECURITY FIX: HOST HEADER INJECTION
+                # =====================================
+
+                # Chi hien link khi demo local
                 if current_app.config.get("DEMO_RESET_LINKS", False):
-                    link = url_for(
-                        "password_reset.reset_password", token=token, _external=True
+                    # Tao duong dan tuong doi
+                    reset_path = url_for(
+                        "password_reset.reset_password",
+                        token=token,
                     )
-                    current_app.logger.warning("LOCAL DEMO RESET LINK: %s", link)
+
+                    # Lay dia chi website tin cay
+                    # tu cau hinh server
+                    base_url = current_app.config["RESET_BASE_URL"].rstrip("/")
+
+                    # Khong tao URL tuyet doi
+                    # truc tiep tu Host header
+                    link = f"{base_url}{reset_path}"
+
+                    current_app.logger.warning(
+                        "LOCAL DEMO RESET LINK: %s",
+                        link,
+                    )
 
         # Khong tiet lo email co ton tai hay khong
         flash(
@@ -88,6 +122,11 @@ def forgot_password():
     return render_template("forgot_password.html")
 
 
+# =========================================
+# 3. RESET PASSWORD
+# =========================================
+
+
 @reset_bp.route("/reset-password/<token>", methods=["GET", "POST"])
 def reset_password(token):
     if request.method == "POST":
@@ -96,6 +135,7 @@ def reset_password(token):
     now = int(time.time())
     db = get_db()
 
+    # Kiem tra token hop le va con han
     record = db.execute(
         """
         SELECT id, user_id
@@ -109,14 +149,17 @@ def reset_password(token):
 
     if record is None:
         flash("Link khong hop le hoac da het han.")
+
         return redirect(url_for("password_reset.forgot_password"))
 
     if request.method == "POST":
         password = request.form.get("password", "")
+
         confirm = request.form.get("confirm", "")
 
         password_bytes = password.encode("utf-8")
 
+        # Kiem tra do dai mat khau
         if not 8 <= len(password_bytes) <= 72:
             flash("Mat khau phai co 8-72 byte.")
 
@@ -124,13 +167,15 @@ def reset_password(token):
             flash("Hai mat khau khong khop.")
 
         else:
+            # Hash mat khau moi bang bcrypt
             password_hash = bcrypt.hashpw(
-                password_bytes, bcrypt.gensalt(rounds=12)
+                password_bytes,
+                bcrypt.gensalt(rounds=12),
             ).decode("utf-8")
 
             now = int(time.time())
 
-            # Chi su dung token mot lan
+            # Token chi duoc su dung mot lan
             updated = db.execute(
                 """
                 UPDATE password_reset_tokens
@@ -144,19 +189,25 @@ def reset_password(token):
 
             if updated.rowcount != 1:
                 db.rollback()
+
                 flash("Link khong con hop le.")
+
                 return redirect(url_for("password_reset.forgot_password"))
 
+            # Cap nhat mat khau moi
             db.execute(
                 """
                 UPDATE users
                 SET password_hash = ?
                 WHERE id = ?
                 """,
-                (password_hash, record["user_id"]),
+                (
+                    password_hash,
+                    record["user_id"],
+                ),
             )
 
-            # Vo hieu hoa cac token reset con lai
+            # Vo hieu hoa cac reset token con lai
             db.execute(
                 """
                 UPDATE password_reset_tokens
@@ -169,7 +220,9 @@ def reset_password(token):
 
             db.commit()
 
+            # Xoa phien dang nhap hien tai
             session.clear()
+
             flash("Doi mat khau thanh cong!")
 
             return redirect(url_for("auth.login"))

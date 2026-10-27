@@ -26,6 +26,10 @@ def create_app(config=None):
         SESSION_COOKIE_SAMESITE="Lax",
         # Hien link reset trong Terminal khi demo
         DEMO_RESET_LINKS=(os.environ.get("DEMO_RESET_LINKS") == "1"),
+        RESET_BASE_URL=os.environ.get(
+            "RESET_BASE_URL",
+            "http://127.0.0.1:5001",
+        ),
     )
 
     if config is not None:
