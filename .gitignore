@@ -1,3 +1,4 @@
+
 .venv/
 __pycache__/
 *.pyc
@@ -7,3 +8,11 @@ __pycache__/
 .pip-audit-cache/
 .coverage
 htmlcov/
+
+# Local runtime data
+instance/*
+!instance/.gitkeep
+
+# Application logs
+audit.log
+*.log
