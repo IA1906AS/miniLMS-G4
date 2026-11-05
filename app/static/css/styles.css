@@ -200,6 +200,27 @@ input::placeholder {
     color: #7889a5;
 }
 
+select {
+    display: block;
+    width: 100%;
+
+    padding: 11px 13px;
+
+    border-radius: 10px;
+    border: 1px solid var(--line);
+
+    background: #0d1729;
+    color: var(--text);
+
+    font-size: 14px;
+    outline: none;
+}
+
+select:focus {
+    border-color: var(--brand);
+    box-shadow: 0 0 0 3px #4f8cff22;
+}
+
 /* ==========================================
    BUTTONS
    ========================================== */

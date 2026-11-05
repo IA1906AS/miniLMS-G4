@@ -11,8 +11,24 @@ from app.api.guards import require_role
 from app.api.logout import bp as logout_bp
 from app.api.pages import bp as pages_bp
 from app.api.reset import bp as reset_bp
-from app.api.schemas import validate_score_body
-from app.api.services import configure_store, get_grades, update_grade
+from app.api.schemas import (
+    validate_course_body,
+    validate_course_update,
+    validate_enrollment_body,
+    validate_score_body,
+)
+from app.api.services import (
+    add_enrollment,
+    configure_store,
+    create_course,
+    delete_course,
+    get_grades,
+    list_course_enrollments,
+    list_courses,
+    remove_enrollment,
+    update_course,
+    update_grade,
+)
 from app.api.signup import bp as signup_bp
 from app.api.store import SEED_PATH, load_seed
 
@@ -61,6 +77,12 @@ def create_app(config=None):
             "RATE_LIMIT_DB_PATH",
             "instance/rate_limits.sqlite3",
         ),
+        LOGIN_MAX_FAILED_ATTEMPTS=int(
+            os.environ.get("LOGIN_MAX_FAILED_ATTEMPTS", "5")
+        ),
+        LOGIN_LOCK_DURATION_SECONDS=int(
+            os.environ.get("LOGIN_LOCK_DURATION_SECONDS", "900")
+        ),
         # Local email simulation (development only).
         LOCAL_EMAIL_ENABLED=os.environ.get("LOCAL_EMAIL_ENABLED") == "1",
     )
@@ -83,7 +105,7 @@ def create_app(config=None):
     # ========================================================
 
     if app.config["LMS_STORE"] == "memory":
-        store = load_seed()
+        store = load_seed(bcrypt_rounds=app.config["BCRYPT_ROUNDS"])
 
     elif app.config["LMS_STORE"] == "sqlite":
         from app.database.db import build_sqlite_store
@@ -232,6 +254,103 @@ def create_app(config=None):
         )
 
         return jsonify(result), 200
+
+    # ========================================================
+    # 10. COURSES API
+    # ========================================================
+
+    @app.get("/courses")
+    def list_courses_route():
+        return jsonify(list_courses(store=store)), 200
+
+    @app.post("/courses")
+    @require_role("ADMIN")
+    def create_course_route():
+        title, instructor_id = validate_course_body(request.get_json(silent=True))
+        result = create_course(g.actor, title, instructor_id, store=store)
+
+        write_audit(
+            actor_id=g.actor["id"],
+            action="CREATE_COURSE",
+            resource=f"/courses/{result['id']}",
+            result="SUCCESS",
+        )
+
+        return jsonify(result), 201
+
+    @app.put("/courses/<course_id>")
+    @require_role("ADMIN")
+    def update_course_route(course_id):
+        title, instructor_id = validate_course_update(request.get_json(silent=True))
+        result = update_course(
+            g.actor,
+            course_id,
+            title=title,
+            instructor_id=instructor_id,
+            store=store,
+        )
+
+        write_audit(
+            actor_id=g.actor["id"],
+            action="UPDATE_COURSE",
+            resource=f"/courses/{course_id}",
+            result="SUCCESS",
+        )
+
+        return jsonify(result), 200
+
+    @app.delete("/courses/<course_id>")
+    @require_role("ADMIN")
+    def delete_course_route(course_id):
+        delete_course(g.actor, course_id, store=store)
+
+        write_audit(
+            actor_id=g.actor["id"],
+            action="DELETE_COURSE",
+            resource=f"/courses/{course_id}",
+            result="SUCCESS",
+        )
+
+        return jsonify({"status": "deleted"}), 200
+
+    # ========================================================
+    # 11. ENROLLMENTS API
+    # ========================================================
+
+    @app.get("/courses/<course_id>/enrollments")
+    @require_role("ADMIN", "INSTRUCTOR")
+    def list_enrollments_route(course_id):
+        result = list_course_enrollments(g.actor, course_id, store=store)
+        return jsonify(result), 200
+
+    @app.post("/courses/<course_id>/enrollments")
+    @require_role("ADMIN", "INSTRUCTOR")
+    def add_enrollment_route(course_id):
+        student_id = validate_enrollment_body(request.get_json(silent=True))
+        result = add_enrollment(g.actor, course_id, student_id, store=store)
+
+        write_audit(
+            actor_id=g.actor["id"],
+            action="ENROLL",
+            resource=f"/courses/{course_id}/enrollments/{student_id}",
+            result="SUCCESS",
+        )
+
+        return jsonify(result), 201
+
+    @app.delete("/courses/<course_id>/enrollments/<student_id>")
+    @require_role("ADMIN", "INSTRUCTOR")
+    def remove_enrollment_route(course_id, student_id):
+        remove_enrollment(g.actor, course_id, student_id, store=store)
+
+        write_audit(
+            actor_id=g.actor["id"],
+            action="UNENROLL",
+            resource=f"/courses/{course_id}/enrollments/{student_id}",
+            result="SUCCESS",
+        )
+
+        return jsonify({"status": "unenrolled"}), 200
 
     # ==========================================
     # FAVICON

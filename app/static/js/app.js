@@ -98,7 +98,7 @@ function translate(code) {
             'Bạn cần đăng nhập trước.',
 
         ACCOUNT_LOCKED:
-            'Tài khoản tạm khóa do sai quá nhiều lần.',
+            'Tài khoản tạm khóa do sai quá nhiều lần. Vui lòng thử lại sau.',
 
         VALIDATION_ERROR:
             'Dữ liệu không hợp lệ.',
@@ -445,6 +445,8 @@ async function loadAccount() {
             $('who').textContent = me.email ?? 'Người dùng';
         }
 
+        initGradeEditor(me.role);
+
     } catch (error) {
         console.error('Load account failed:', error.message);
 
@@ -488,17 +490,32 @@ async function loadAccount() {
 
 async function loadGrades() {
     const table = $('grades');
-    const courses = ['c1', 'c2'];
 
     if (!table) return;
 
     table.replaceChildren();
 
+    let courses;
+
+    try {
+        courses = await api('/courses', { auth: true });
+    } catch (error) {
+        if (error.status === 403 || error.status === 404) {
+            courses = [];
+        } else {
+            throw error;
+        }
+    }
+
+    if (!Array.isArray(courses)) {
+        courses = [];
+    }
+
     for (const course of courses) {
         try {
             const rows = await api(
                 '/courses/' +
-                encodeURIComponent(course) +
+                encodeURIComponent(course.id) +
                 '/grades',
                 { auth: true }
             );
@@ -511,7 +528,7 @@ async function loadGrades() {
                 const tr = document.createElement('tr');
 
                 for (const value of [
-                    course,
+                    course.title || course.id,
                     row.studentId,
                     row.score
                 ]) {
@@ -547,6 +564,168 @@ async function loadGrades() {
         tr.appendChild(td);
         table.appendChild(tr);
     }
+}
+
+
+// ==========================================
+// QUẢN LÝ ĐIỂM (GIẢNG VIÊN)
+// ==========================================
+
+async function loadEnrollmentsIntoEditor(courseId) {
+    const studentSelect = $('edit-student');
+
+    if (!studentSelect) return;
+
+    studentSelect.replaceChildren();
+
+    if (!courseId) return;
+
+    try {
+        const enrollments = await api(
+            '/courses/' +
+            encodeURIComponent(courseId) +
+            '/enrollments',
+            { auth: true }
+        );
+
+        if (!Array.isArray(enrollments)) {
+            return;
+        }
+
+        const placeholder = document.createElement('option');
+        placeholder.value = '';
+        placeholder.textContent = 'Chọn sinh viên';
+        studentSelect.appendChild(placeholder);
+
+        for (const item of enrollments) {
+            const option = document.createElement('option');
+            option.value = item.studentId;
+            option.textContent = item.studentId + ' — điểm ' + item.score;
+            studentSelect.appendChild(option);
+        }
+
+        const msg = $('edit-grade-msg');
+        if (msg) {
+            msg.className = 'msg';
+        }
+    } catch (error) {
+        flash(
+            $('edit-grade-msg'),
+            translate(error.message),
+            false
+        );
+    }
+}
+
+
+async function initGradeEditor(role) {
+    const editor = $('grade-editor');
+
+    if (!editor) return;
+
+    if (role !== 'INSTRUCTOR') {
+        editor.hidden = true;
+        return;
+    }
+
+    editor.hidden = false;
+
+    const courseSelect = $('edit-course');
+    const studentSelect = $('edit-student');
+    const scoreInput = $('edit-score');
+    const button = $('edit-grade-button');
+
+    try {
+        const courses = await api('/courses', { auth: true });
+
+        courseSelect.replaceChildren();
+
+        const placeholder = document.createElement('option');
+        placeholder.value = '';
+        placeholder.textContent = 'Chọn môn học';
+        courseSelect.appendChild(placeholder);
+
+        for (const course of courses) {
+            const option = document.createElement('option');
+            option.value = course.id;
+            option.textContent = course.title + ' (' + course.id + ')';
+            courseSelect.appendChild(option);
+        }
+    } catch (error) {
+        flash(
+            $('edit-grade-msg'),
+            translate(error.message),
+            false
+        );
+        return;
+    }
+
+    if (courseSelect.dataset.initialized === 'true') {
+        return;
+    }
+
+    courseSelect.dataset.initialized = 'true';
+
+    courseSelect.addEventListener('change', function () {
+        scoreInput.value = '';
+        loadEnrollmentsIntoEditor(courseSelect.value);
+    });
+
+    button.addEventListener('click', async function () {
+        const courseId = courseSelect.value;
+        const studentId = studentSelect.value;
+        const raw = scoreInput.value;
+
+        if (!courseId || !studentId || raw === '') {
+            flash(
+                $('edit-grade-msg'),
+                'Vui lòng chọn môn, sinh viên và nhập điểm.',
+                false
+            );
+            return;
+        }
+
+        const score = Number(raw);
+
+        if (!Number.isFinite(score) || score < 0 || score > 10) {
+            flash(
+                $('edit-grade-msg'),
+                'Điểm phải nằm trong khoảng 0 đến 10.',
+                false
+            );
+            return;
+        }
+
+        button.disabled = true;
+
+        try {
+            await api(
+                '/courses/' +
+                encodeURIComponent(courseId) +
+                '/grades/' +
+                encodeURIComponent(studentId),
+                {
+                    method: 'PUT',
+                    auth: true,
+                    body: { score: score }
+                }
+            );
+
+            flash($('edit-grade-msg'), 'Đã cập nhật điểm.', true);
+            scoreInput.value = '';
+
+            await loadGrades();
+            await loadEnrollmentsIntoEditor(courseId);
+        } catch (error) {
+            flash(
+                $('edit-grade-msg'),
+                translate(error.message),
+                false
+            );
+        } finally {
+            button.disabled = false;
+        }
+    });
 }
 
 

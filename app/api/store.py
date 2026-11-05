@@ -45,7 +45,7 @@ class ResetToken:
     expires_at: float
 
 
-def load_seed():
+def load_seed(bcrypt_rounds: int = 12):
     with open(SEED_PATH, encoding="utf-8") as file:
         data = json.load(file)
 
@@ -56,7 +56,8 @@ def load_seed():
         user = {key: value for key, value in record.items() if key != "password"}
 
         password_hash = bcrypt.hashpw(
-            record["password"].encode("utf-8"), bcrypt.gensalt(rounds=12)
+            record["password"].encode("utf-8"),
+            bcrypt.gensalt(rounds=bcrypt_rounds),
         )
 
         user["password_hash"] = password_hash.decode("utf-8")
@@ -74,6 +75,8 @@ def load_seed():
         "users_by_email": users_by_email,
         "courses": courses,
         "enrollments": enrollments,
+        # Account lockout state: email -> {"count", "locked_until"}.
         "failed_logins": {},
         "registration_lock": threading.Lock(),
+        "course_lock": threading.Lock(),
     }

@@ -1,2 +1,4 @@
-def main() -> None:
-    print("Hello from my-project!")
+"""Scaffold package placeholder.
+
+The miniLMS application itself lives in the top-level ``app`` package.
+"""

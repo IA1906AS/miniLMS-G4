@@ -409,14 +409,35 @@ def test_a17_missing_secret(monkeypatch):
 
 
 def test_a18_account_lockout(client):
-    """Repeated wrong passwords must not hard-lock an account."""
+    """Repeated wrong passwords soft-lock the account temporarily."""
 
-    for _ in range(5):
+    for _ in range(4):
         response = login(
             client,
             "dung.sv@lms.test",
             "wrong-password",
         )
+        assert_error(response, 401, "INVALID_CREDENTIALS")
+
+    # The fifth consecutive failure triggers a temporary lockout.
+    response = login(client, "dung.sv@lms.test", "wrong-password")
+    assert_error(response, 429, "ACCOUNT_LOCKED")
+    assert int(response.headers["Retry-After"]) > 0
+
+
+def test_successful_login_resets_lockout_counter(client):
+    """A successful login resets the failed-attempt counter."""
+
+    for _ in range(4):
+        response = login(client, "dung.sv@lms.test", "wrong-password")
+        assert_error(response, 401, "INVALID_CREDENTIALS")
+
+    # Correct login resets the counter.
+    assert login(client, "dung.sv@lms.test").status_code == 200
+
+    # Four more failures should NOT trigger a lockout (counter was reset).
+    for _ in range(4):
+        response = login(client, "dung.sv@lms.test", "wrong-password")
         assert_error(response, 401, "INVALID_CREDENTIALS")
 
 
@@ -1031,13 +1052,14 @@ def test_rate_limit_window_expires(tmp_path, backend, monkeypatch):
 
 
 @pytest.mark.parametrize("backend", ["memory", "sqlite"])
-def test_account_lockout_dos_prevention(tmp_path, backend):
-    """A valid user can log in after repeated incorrect attempts."""
+def test_account_soft_lockout_expires(tmp_path, backend, monkeypatch):
+    """A soft-locked account unlocks automatically after the lock duration."""
+    import app.api.auth as auth_module
 
     c = rate_limit_client(
         tmp_path,
         backend,
-        "account_lockout_dos",
+        "account_lockout_expires",
     )
 
     email = "sec03-test@lms.test"
@@ -1054,7 +1076,7 @@ def test_account_lockout_dos_prevention(tmp_path, backend):
 
     assert register_response.status_code in (200, 201)
 
-    # Simulate five failed login attempts.
+    # Simulate five failed login attempts: the fifth triggers the lockout.
     for _ in range(5):
         response = c.post(
             "/auth/login",
@@ -1064,13 +1086,23 @@ def test_account_lockout_dos_prevention(tmp_path, backend):
             },
         )
 
-        assert_error(
-            response,
-            401,
-            "INVALID_CREDENTIALS",
-        )
+    assert_error(response, 429, "ACCOUNT_LOCKED")
 
-    # Correct credentials must still work.
+    # Correct credentials are rejected while the account is locked.
+    locked = c.post(
+        "/auth/login",
+        json={
+            "email": email,
+            "password": password,
+        },
+    )
+    assert_error(locked, 429, "ACCOUNT_LOCKED")
+
+    # Advance past the lock duration.
+    now = time.time()
+    monkeypatch.setattr(auth_module.time, "time", lambda: now + 901)
+
+    # Correct credentials work again after the lock expires.
     response = c.post(
         "/auth/login",
         json={
@@ -1766,3 +1798,214 @@ def test_sec06_no_token_echo_in_production(tmp_path, backend):
     assert response.status_code == 202
     assert response.get_json() == {"status": "sent"}
     assert "resetToken" not in response.get_json()
+
+
+# ============================================================
+# COURSE MANAGEMENT (B1)
+# ============================================================
+
+
+def course_client(tmp_path, backend, suffix):
+    config = {
+        "TESTING": True,
+        "JWT_SECRET": SECRET,
+        "AUDIT_LOG_PATH": str(tmp_path / f"courses_{backend}_{suffix}.log"),
+        "BCRYPT_ROUNDS": 4,
+        "LMS_STORE": backend,
+        "SQLITE_PATH": str(tmp_path / f"courses_{backend}_{suffix}.sqlite3"),
+    }
+    return create_app(config).test_client()
+
+
+@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+def test_list_courses(tmp_path, backend):
+    c = course_client(tmp_path, backend, "list")
+    h = headers(token_for(c, "chi.sv@lms.test"))
+    response = c.get("/courses", headers=h)
+    assert response.status_code == 200
+    courses = response.get_json()
+    assert len(courses) == 2
+    assert {course["id"] for course in courses} == {"c1", "c2"}
+    assert all({"id", "title", "instructorId"} <= set(course) for course in courses)
+
+
+@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+def test_list_courses_requires_auth(tmp_path, backend):
+    c = course_client(tmp_path, backend, "auth")
+    assert_error(c.get("/courses"), 401, "UNAUTHENTICATED")
+
+
+@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+def test_create_course_admin(tmp_path, backend):
+    c = course_client(tmp_path, backend, "create")
+    h = headers(token_for(c, "admin@lms.test"))
+    response = c.post(
+        "/courses",
+        json={"title": "Nhập môn AI", "instructorId": "u2"},
+        headers=h,
+    )
+    assert response.status_code == 201
+    body = response.get_json()
+    assert body["title"] == "Nhập môn AI"
+    assert body["instructorId"] == "u2"
+    assert body["id"].startswith("c")
+
+    listed = c.get("/courses", headers=h).get_json()
+    assert any(course["id"] == body["id"] for course in listed)
+
+
+@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+def test_create_course_forbidden_for_non_admin(tmp_path, backend):
+    c = course_client(tmp_path, backend, "create_forbidden")
+    for email in ("an.gv@lms.test", "chi.sv@lms.test"):
+        h = headers(token_for(c, email))
+        response = c.post(
+            "/courses",
+            json={"title": "X", "instructorId": "u2"},
+            headers=h,
+        )
+        assert_error(response, 403, "FORBIDDEN")
+
+
+@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+def test_create_course_requires_instructor(tmp_path, backend):
+    c = course_client(tmp_path, backend, "create_instr")
+    h = headers(token_for(c, "admin@lms.test"))
+    response = c.post(
+        "/courses",
+        json={"title": "X", "instructorId": "u4"},
+        headers=h,
+    )
+    assert_error(response, 400, "VALIDATION_ERROR")
+
+
+@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+def test_update_course_admin(tmp_path, backend):
+    c = course_client(tmp_path, backend, "update")
+    h = headers(token_for(c, "admin@lms.test"))
+    response = c.put("/courses/c1", json={"title": "Lập trình Web nâng cao"}, headers=h)
+    assert response.status_code == 200
+    assert response.get_json()["title"] == "Lập trình Web nâng cao"
+    assert response.get_json()["instructorId"] == "u2"
+
+
+@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+def test_update_course_forbidden(tmp_path, backend):
+    c = course_client(tmp_path, backend, "update_forbidden")
+    h = headers(token_for(c, "an.gv@lms.test"))
+    response = c.put("/courses/c1", json={"title": "X"}, headers=h)
+    assert_error(response, 403, "FORBIDDEN")
+
+
+@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+def test_delete_course_admin(tmp_path, backend):
+    c = course_client(tmp_path, backend, "delete")
+    h = headers(token_for(c, "admin@lms.test"))
+    response = c.delete("/courses/c1", headers=h)
+    assert response.status_code == 200
+    listed = c.get("/courses", headers=h).get_json()
+    assert all(course["id"] != "c1" for course in listed)
+
+
+@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+def test_delete_course_forbidden(tmp_path, backend):
+    c = course_client(tmp_path, backend, "delete_forbidden")
+    h = headers(token_for(c, "an.gv@lms.test"))
+    response = c.delete("/courses/c1", headers=h)
+    assert_error(response, 403, "FORBIDDEN")
+
+
+# ============================================================
+# ENROLLMENT MANAGEMENT (B2)
+# ============================================================
+
+
+@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+def test_list_enrollments_instructor(tmp_path, backend):
+    c = course_client(tmp_path, backend, "enroll_list")
+    h = headers(token_for(c, "an.gv@lms.test"))
+    response = c.get("/courses/c1/enrollments", headers=h)
+    assert response.status_code == 200
+    assert response.get_json() == [
+        {"studentId": "u4", "score": 7.5},
+        {"studentId": "u5", "score": 8.0},
+    ]
+
+
+@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+def test_list_enrollments_admin(tmp_path, backend):
+    c = course_client(tmp_path, backend, "enroll_list_admin")
+    h = headers(token_for(c, "admin@lms.test"))
+    response = c.get("/courses/c1/enrollments", headers=h)
+    assert response.status_code == 200
+    assert len(response.get_json()) == 2
+
+
+@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+def test_list_enrollments_wrong_instructor(tmp_path, backend):
+    c = course_client(tmp_path, backend, "enroll_list_wrong")
+    h = headers(token_for(c, "binh.gv@lms.test"))
+    response = c.get("/courses/c1/enrollments", headers=h)
+    assert_error(response, 403, "FORBIDDEN")
+
+
+@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+def test_list_enrollments_student_forbidden(tmp_path, backend):
+    c = course_client(tmp_path, backend, "enroll_list_student")
+    h = headers(token_for(c, "chi.sv@lms.test"))
+    response = c.get("/courses/c1/enrollments", headers=h)
+    assert_error(response, 403, "FORBIDDEN")
+
+
+@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+def test_add_enrollment(tmp_path, backend):
+    c = course_client(tmp_path, backend, "enroll_add")
+    h = headers(token_for(c, "an.gv@lms.test"))
+    response = c.post("/courses/c1/enrollments", json={"studentId": "u6"}, headers=h)
+    assert response.status_code == 201
+    assert response.get_json() == {"studentId": "u6", "score": 0.0}
+
+    listed = c.get("/courses/c1/enrollments", headers=h).get_json()
+    assert {"studentId": "u6", "score": 0.0} in listed
+
+
+@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+def test_add_enrollment_duplicate(tmp_path, backend):
+    c = course_client(tmp_path, backend, "enroll_dup")
+    h = headers(token_for(c, "an.gv@lms.test"))
+    response = c.post("/courses/c1/enrollments", json={"studentId": "u4"}, headers=h)
+    assert_error(response, 400, "VALIDATION_ERROR")
+
+
+@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+def test_add_enrollment_non_student(tmp_path, backend):
+    c = course_client(tmp_path, backend, "enroll_nonstudent")
+    h = headers(token_for(c, "an.gv@lms.test"))
+    response = c.post("/courses/c1/enrollments", json={"studentId": "u2"}, headers=h)
+    assert_error(response, 400, "VALIDATION_ERROR")
+
+
+@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+def test_remove_enrollment(tmp_path, backend):
+    c = course_client(tmp_path, backend, "enroll_remove")
+    h = headers(token_for(c, "an.gv@lms.test"))
+    response = c.delete("/courses/c1/enrollments/u4", headers=h)
+    assert response.status_code == 200
+    listed = c.get("/courses/c1/enrollments", headers=h).get_json()
+    assert all(item["studentId"] != "u4" for item in listed)
+
+
+@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+def test_remove_enrollment_missing(tmp_path, backend):
+    c = course_client(tmp_path, backend, "enroll_remove_missing")
+    h = headers(token_for(c, "an.gv@lms.test"))
+    response = c.delete("/courses/c1/enrollments/u6", headers=h)
+    assert_error(response, 404, "NOT_FOUND")
+
+
+@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+def test_add_enrollment_wrong_instructor(tmp_path, backend):
+    c = course_client(tmp_path, backend, "enroll_add_wrong")
+    h = headers(token_for(c, "binh.gv@lms.test"))
+    response = c.post("/courses/c1/enrollments", json={"studentId": "u6"}, headers=h)
+    assert_error(response, 403, "FORBIDDEN")

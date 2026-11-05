@@ -99,7 +99,7 @@ def register_error_handlers(app):
             403: "FORBIDDEN",
             404: "NOT_FOUND",
             405: "METHOD_NOT_ALLOWED",
-            429: "ACCOUNT_LOCKED",
+            429: "RATE_LIMITED",
         }
 
         code = codes.get(error.code, "INTERNAL_ERROR")

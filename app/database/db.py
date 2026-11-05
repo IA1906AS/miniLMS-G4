@@ -446,6 +446,123 @@ class SqliteStore:
             )
 
     # ========================================================
+    # COURSE CRUD
+    # ========================================================
+
+    def list_courses(self) -> list[Course]:
+        """Return all courses ordered by id."""
+        with self._lock, self._connect() as conn:
+            rows = conn.execute("SELECT * FROM courses ORDER BY id").fetchall()
+
+        return [_course(row) for row in rows]
+
+    def create_course(
+        self,
+        title: str,
+        instructor_id: str,
+    ) -> Course:
+        """Create a course with a collision-resistant ID."""
+        import uuid
+
+        course_id = f"c{uuid.uuid4().hex}"
+
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO courses (id, title, instructor_id)
+                VALUES (?, ?, ?)
+                """,
+                (course_id, title, instructor_id),
+            )
+
+        return Course(
+            id=course_id,
+            title=title,
+            instructor_id=instructor_id,
+        )
+
+    def update_course(
+        self,
+        course_id: str,
+        *,
+        title: str | None = None,
+        instructor_id: str | None = None,
+    ) -> Course:
+        """Update course fields and return the updated course."""
+        with self._lock, self._connect() as conn:
+            if title is not None:
+                conn.execute(
+                    "UPDATE courses SET title = ? WHERE id = ?",
+                    (title, course_id),
+                )
+
+            if instructor_id is not None:
+                conn.execute(
+                    "UPDATE courses SET instructor_id = ? WHERE id = ?",
+                    (instructor_id, course_id),
+                )
+
+            row = conn.execute(
+                "SELECT * FROM courses WHERE id = ?",
+                (course_id,),
+            ).fetchone()
+
+        if row is None:
+            raise ValueError(f"Course not found: {course_id}")
+
+        return _course(row)
+
+    def delete_course(self, course_id: str) -> None:
+        """Delete a course and its enrollments."""
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                "DELETE FROM enrollments WHERE course_id = ?",
+                (course_id,),
+            )
+            conn.execute(
+                "DELETE FROM courses WHERE id = ?",
+                (course_id,),
+            )
+
+    def add_enrollment(
+        self,
+        course_id: str,
+        student_id: str,
+        score: float = 0.0,
+    ) -> Enrollment:
+        """Enroll a student in a course."""
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO enrollments (course_id, student_id, score)
+                VALUES (?, ?, ?)
+                """,
+                (course_id, student_id, score),
+            )
+
+        return Enrollment(
+            course_id=course_id,
+            student_id=student_id,
+            score=score,
+        )
+
+    def remove_enrollment(
+        self,
+        course_id: str,
+        student_id: str,
+    ) -> None:
+        """Unenroll a student from a course."""
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                """
+                DELETE FROM enrollments
+                WHERE course_id = ?
+                AND student_id = ?
+                """,
+                (course_id, student_id),
+            )
+
+    # ========================================================
     # LOGIN ATTEMPTS
     # ========================================================
 
@@ -617,6 +734,14 @@ def _enrollment(row: sqlite3.Row) -> Enrollment:
         course_id=row["course_id"],
         student_id=row["student_id"],
         score=row["score"],
+    )
+
+
+def _course(row: sqlite3.Row) -> Course:
+    return Course(
+        id=row["id"],
+        title=row["title"],
+        instructor_id=row["instructor_id"],
     )
 
 

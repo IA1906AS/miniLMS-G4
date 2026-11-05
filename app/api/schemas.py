@@ -78,3 +78,54 @@ def validate_reset_confirm(data):
         raise ValidationError()
 
     return token, password
+
+
+def validate_course_body(data):
+    if not isinstance(data, dict) or set(data) != {"title", "instructorId"}:
+        raise ValidationError()
+
+    title = data["title"]
+    instructor_id = data["instructorId"]
+
+    if not isinstance(title, str) or not title.strip():
+        raise ValidationError()
+
+    if not isinstance(instructor_id, str) or not instructor_id.strip():
+        raise ValidationError()
+
+    return title.strip(), instructor_id.strip()
+
+
+def validate_course_update(data):
+    if not isinstance(data, dict):
+        raise ValidationError()
+
+    if not data or set(data) - {"title", "instructorId"}:
+        raise ValidationError()
+
+    title = data.get("title")
+    instructor_id = data.get("instructorId")
+
+    if "title" in data and (not isinstance(title, str) or not title.strip()):
+        raise ValidationError()
+
+    if "instructorId" in data and (
+        not isinstance(instructor_id, str) or not instructor_id.strip()
+    ):
+        raise ValidationError()
+
+    return (
+        title.strip() if isinstance(title, str) else None,
+        instructor_id.strip() if isinstance(instructor_id, str) else None,
+    )
+
+
+def validate_enrollment_body(data):
+    if not isinstance(data, dict) or set(data) != {"studentId"}:
+        raise ValidationError()
+
+    student_id = data["studentId"]
+    if not isinstance(student_id, str) or not student_id.strip():
+        raise ValidationError()
+
+    return student_id.strip()
