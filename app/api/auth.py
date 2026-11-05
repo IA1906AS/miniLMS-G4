@@ -26,7 +26,6 @@ from flask import (
 )
 
 from app.api.errors import (
-    AccountLocked,
     InvalidCredentials,
     Unauthenticated,
     ValidationError,
@@ -231,9 +230,7 @@ def _attempt_failures(attempt):
 
 def _attempt_locked_until(attempt):
     return (
-        attempt["locked_until"]
-        if isinstance(attempt, dict)
-        else attempt.locked_until
+        attempt["locked_until"] if isinstance(attempt, dict) else attempt.locked_until
     )
 
 

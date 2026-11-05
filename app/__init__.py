@@ -77,9 +77,7 @@ def create_app(config=None):
             "RATE_LIMIT_DB_PATH",
             "instance/rate_limits.sqlite3",
         ),
-        LOGIN_MAX_FAILED_ATTEMPTS=int(
-            os.environ.get("LOGIN_MAX_FAILED_ATTEMPTS", "5")
-        ),
+        LOGIN_MAX_FAILED_ATTEMPTS=int(os.environ.get("LOGIN_MAX_FAILED_ATTEMPTS", "5")),
         LOGIN_LOCK_DURATION_SECONDS=int(
             os.environ.get("LOGIN_LOCK_DURATION_SECONDS", "900")
         ),

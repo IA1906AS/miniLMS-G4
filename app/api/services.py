@@ -323,9 +323,7 @@ def delete_course(actor, course_id, *, store=None):
         with store["course_lock"]:
             store["courses"].pop(course_id, None)
             store["enrollments"][:] = [
-                item
-                for item in store["enrollments"]
-                if item["courseId"] != course_id
+                item for item in store["enrollments"] if item["courseId"] != course_id
             ]
     else:
         store.delete_course(course_id)
@@ -403,8 +401,7 @@ def remove_enrollment(actor, course_id, student_id, *, store=None):
                 item
                 for item in store["enrollments"]
                 if not (
-                    item["courseId"] == course_id
-                    and item["studentId"] == student_id
+                    item["courseId"] == course_id and item["studentId"] == student_id
                 )
             ]
             if len(store["enrollments"]) == before:
