@@ -26,11 +26,7 @@ def require_role(*roles):
             course_id = kwargs.get("course_id")
 
             if course_id is not None:
-                course_exists = (
-                    course_id in store["courses"]
-                    if isinstance(store, dict)
-                    else store.get_course(course_id) is not None
-                )
+                course_exists = store.get_course(course_id) is not None
                 if not course_exists:
                     raise NotFound()
 

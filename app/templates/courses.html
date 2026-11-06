@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% block title %}Khóa học{% endblock %}
+{% block content %}
+<div class="home-layout" id="catalog-page">
+    <section class="card">
+        <h1>Khóa học</h1>
+        <form id="course-search">
+            <label for="course-query">Tên khóa học</label>
+            <input id="course-query" type="search" maxlength="200" placeholder="Nhập tên khóa học">
+            <label for="course-instructor">Giảng viên</label>
+            <select id="course-instructor"><option value="">Tất cả giảng viên</option></select>
+            <button type="submit">Tìm kiếm</button>
+        </form>
+        <p id="course-empty" class="sub" hidden>Không tìm thấy khóa học.</p>
+        <ul id="course-list" class="member-list"></ul>
+        <div id="catalog-msg" class="msg" role="status" aria-live="polite"></div>
+    </section>
+    <section class="card" id="course-create-panel" hidden>
+        <h2>Tạo khóa học</h2>
+        <form id="course-create">
+            <label for="course-new-title">Tên khóa học</label>
+            <input id="course-new-title" maxlength="200" required>
+            <div id="course-owner-field" hidden>
+                <label for="course-new-owner">Giảng viên phụ trách</label>
+                <select id="course-new-owner"></select>
+            </div>
+            <button type="submit">Tạo khóa học</button>
+        </form>
+        <div id="create-course-msg" class="msg" role="status" aria-live="polite"></div>
+    </section>
+    <section class="card" id="course-join-panel" hidden>
+        <h2>Ghi danh khóa học</h2>
+        <form id="course-join">
+            <label for="course-code">Mã khóa học</label>
+            <input id="course-code" maxlength="100" required placeholder="Ví dụ: c1">
+            <button type="submit">Ghi danh</button>
+        </form>
+        <div id="join-course-msg" class="msg" role="status" aria-live="polite"></div>
+    </section>
+    <section class="card" id="course-detail" hidden>
+        <h2 id="course-detail-title"></h2>
+        <p id="course-detail-code" class="profile-bio"></p>
+        <p id="course-detail-owner"></p>
+        <p id="course-detail-state" class="sub"></p>
+        <p><a id="course-study-link" class="btn-link" hidden>Bài tập, trắc nghiệm và kết quả</a></p>
+        <div id="course-manager" hidden>
+            <h3>Cập nhật khóa học</h3>
+            <form id="course-edit">
+                <label for="course-edit-title">Tên khóa học</label>
+                <input id="course-edit-title" maxlength="200" required>
+                <button type="submit">Lưu thay đổi</button>
+            </form>
+            <h3>Danh sách ghi danh</h3>
+            <ul id="course-enrollments" class="member-list"></ul>
+            <form id="enrollment-add">
+                <label for="enrollment-student">Mã sinh viên</label>
+                <input id="enrollment-student" required placeholder="Ví dụ: u6">
+                <button type="submit">Thêm sinh viên</button>
+            </form>
+        </div>
+        <h3>Tài liệu bài giảng</h3>
+        <p id="material-access" class="sub"></p>
+        <ul id="course-materials" class="member-list"></ul>
+        <form id="material-upload" hidden>
+            <label for="material-title">Tên tài liệu</label>
+            <input id="material-title" maxlength="200" placeholder="Mặc định dùng tên tệp">
+            <label for="material-file">Tệp tài liệu</label>
+            <input id="material-file" type="file" accept=".pdf,.txt,.docx,.pptx,.xlsx" required>
+            <p class="sub">PDF, TXT (UTF-8), DOCX, PPTX hoặc XLSX; tối đa 10 MB.</p>
+            <button type="submit">Tải tài liệu lên</button>
+        </form>
+        <div id="course-detail-msg" class="msg" role="status" aria-live="polite"></div>
+    </section>
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/courses.js') }}"></script>
+{% endblock %}

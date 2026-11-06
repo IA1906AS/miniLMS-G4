@@ -2,18 +2,17 @@
 
 Security features:
 - Registration request validation.
-- Shared SQLite IP-based rate limiting.
+- Shared PostgreSQL IP-based rate limiting.
 - Duplicate email detection.
 - bcrypt password hashing.
 - STUDENT-only account creation.
 - JWT token version initialization.
-- Memory and SQLite storage support.
+- PostgreSQL storage support.
 """
 
 from __future__ import annotations
 
-import sqlite3
-
+import psycopg
 from flask import (
     Blueprint,
     Response,
@@ -71,47 +70,16 @@ def register() -> tuple[Response, int] | Response:
     )
 
     # STEP 5: Create user safely
-    if isinstance(store, dict):
-        with store["registration_lock"]:
-            # Check and create within the same lock.
-            if email in store["users_by_email"]:
-                raise ValidationError("email đã được đăng ký")
+    try:
+        user = store.add_user(
+            email=email,
+            password_hash=password_hash,
+            role="STUDENT",
+        )
+    except psycopg.IntegrityError as exc:
+        raise ValidationError("email đã được đăng ký") from exc
 
-            next_id = (
-                max(
-                    (
-                        int(user_id[1:])
-                        for user_id in store["users"]
-                        if user_id.startswith("u") and user_id[1:].isdigit()
-                    ),
-                    default=0,
-                )
-                + 1
-            )
-
-            user_id = f"u{next_id}"
-
-            store["users"][user_id] = {
-                "id": user_id,
-                "email": email,
-                "role": "STUDENT",
-                "password_hash": password_hash,
-                "token_version": 0,
-            }
-
-            store["users_by_email"][email] = user_id
-
-    else:
-        try:
-            user = store.add_user(
-                email=email,
-                password_hash=password_hash,
-                role="STUDENT",
-            )
-        except sqlite3.IntegrityError as exc:
-            raise ValidationError("email đã được đăng ký") from exc
-
-        user_id = user.id
+    user_id = user.id
 
     # STEP 6: Return response
     return jsonify(

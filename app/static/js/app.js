@@ -37,7 +37,8 @@ async function api(path, {
         'Accept': 'application/json'
     };
 
-    if (body !== undefined) {
+    const multipart = body instanceof FormData;
+    if (body !== undefined && !multipart) {
         headers['Content-Type'] = 'application/json';
     }
 
@@ -55,7 +56,7 @@ async function api(path, {
         method,
         headers,
         body: body !== undefined
-            ? JSON.stringify(body)
+            ? (multipart ? body : JSON.stringify(body))
             : undefined
     });
 
@@ -102,6 +103,16 @@ function translate(code) {
 
         VALIDATION_ERROR:
             'Dữ liệu không hợp lệ.',
+        FILE_TOO_LARGE:
+            'Tệp vượt quá dung lượng cho phép. Vui lòng chọn tệp nhỏ hơn.',
+        ALREADY_ENROLLED:
+            'Bạn đã ghi danh khóa học này.',
+        ASSIGNMENT_CLOSED:
+            'Đã hết hạn nộp bài tập.',
+        ATTEMPT_LIMIT_REACHED:
+            'Bạn đã dùng hết số lượt làm bài.',
+        ATTEMPT_CLOSED:
+            'Lượt làm bài đã kết thúc. Những đáp án đã lưu được chấm ở máy chủ.',
 
         NOT_FOUND:
             'Không tìm thấy dữ liệu.',
@@ -446,6 +457,7 @@ async function loadAccount() {
         }
 
         initGradeEditor(me.role);
+        initProfileFeatures();
 
     } catch (error) {
         console.error('Load account failed:', error.message);

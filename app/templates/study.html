@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+{% block title %}Bài tập và trắc nghiệm{% endblock %}
+{% block content %}
+<div class="home-layout" id="study-page">
+    <section class="card">
+        <a href="{{ url_for('pages.catalog') }}">← Danh sách khóa học</a>
+        <h1 id="study-title">Bài tập và trắc nghiệm</h1>
+        <div id="study-msg" class="msg" role="status" aria-live="polite"></div>
+    </section>
+    <section class="card" id="assignment-create-panel" hidden>
+        <h2>Tạo bài tập</h2>
+        <form id="assignment-create">
+            <label for="assignment-title">Tên bài tập</label>
+            <input id="assignment-title" maxlength="200" required>
+            <label for="assignment-description">Yêu cầu</label>
+            <textarea id="assignment-description" maxlength="10000" rows="4"></textarea>
+            <label for="assignment-due">Hạn nộp (giờ địa phương)</label>
+            <input id="assignment-due" type="datetime-local" required>
+            <button type="submit">Tạo bài tập</button>
+        </form>
+        <div id="assignment-create-msg" class="msg" role="status" aria-live="polite"></div>
+    </section>
+    <section class="card" id="assignment-list-panel" hidden>
+        <h2>Bài tập</h2>
+        <ul id="assignment-list" class="member-list"></ul>
+        <section id="assignment-detail" hidden>
+            <h3 id="assignment-detail-title"></h3>
+            <p id="assignment-detail-description" class="profile-bio"></p>
+            <p id="assignment-detail-due"></p>
+            <form id="submission-upload" hidden>
+                <label for="submission-file">Tệp bài làm</label>
+                <input id="submission-file" type="file" accept=".pdf,.txt,.docx,.pptx,.xlsx,.zip" required>
+                <p class="sub">Tối đa 10 MB. PDF, TXT (UTF-8), DOCX, PPTX, XLSX hoặc ZIP.
+                    Có thể nộp lại trước hạn; bài mới thay thế bài cũ và cần được chấm lại.</p>
+                <button type="submit">Nộp bài</button>
+            </form>
+            <div id="assignment-detail-msg" class="msg" role="status" aria-live="polite"></div>
+            <h3>Bài nộp và nhận xét</h3>
+            <div id="submission-list"></div>
+        </section>
+    </section>
+    <section class="card" id="quiz-create-panel" hidden>
+        <h2>Tạo bài kiểm tra trắc nghiệm</h2>
+        <form id="quiz-create">
+            <label for="quiz-title">Tên bài kiểm tra</label>
+            <input id="quiz-title" maxlength="200" required>
+            <label for="quiz-duration">Thời lượng (phút, 1–180)</label>
+            <input id="quiz-duration" type="number" min="1" max="180" value="15" required>
+            <label for="quiz-limit">Số lượt làm tối đa (1–10)</label>
+            <input id="quiz-limit" type="number" min="1" max="10" value="1" required>
+            <div id="quiz-question-editor"></div>
+            <button id="quiz-add-question" type="button">Thêm câu hỏi</button>
+            <button type="submit">Tạo bài kiểm tra</button>
+        </form>
+        <div id="quiz-create-msg" class="msg" role="status" aria-live="polite"></div>
+    </section>
+    <section class="card" id="quiz-list-panel" hidden>
+        <h2>Bài kiểm tra trắc nghiệm</h2>
+        <ul id="quiz-list" class="member-list"></ul>
+        <section id="quiz-detail" hidden>
+            <h3 id="quiz-detail-title"></h3>
+            <p id="quiz-detail-info"></p>
+            <div id="quiz-teacher-questions"></div>
+            <button id="quiz-start" type="button" hidden>Bắt đầu / tiếp tục làm bài</button>
+            <p id="quiz-timer" role="timer" hidden></p>
+            <p id="quiz-save-state" role="status" aria-live="polite"></p>
+            <form id="quiz-answer-form" hidden>
+                <div id="quiz-answer-questions"></div>
+                <button type="submit">Nộp bài trắc nghiệm</button>
+            </form>
+            <div id="quiz-detail-msg" class="msg" role="status" aria-live="polite"></div>
+            <h3>Lượt làm và kết quả</h3>
+            <ul id="quiz-attempt-list" class="member-list"></ul>
+        </section>
+    </section>
+    <section class="card" id="assessment-results-panel" hidden>
+        <h2>Kết quả của bạn</h2>
+        <p class="sub">Điểm bài tập và trắc nghiệm theo thang 10.</p>
+        <div id="assessment-results"></div>
+    </section>
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/study.js') }}"></script>
+{% endblock %}

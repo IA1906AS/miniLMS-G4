@@ -570,3 +570,66 @@ footer p {
 [hidden] {
     display: none !important;
 }
+
+textarea {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 10px;
+    margin-bottom: 14px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--bg, #0d1729);
+    color: inherit;
+    font: inherit;
+    resize: vertical;
+}
+
+.profile-avatar {
+    width: 96px;
+    height: 96px;
+    border-radius: 50%;
+    object-fit: cover;
+    border: 1px solid var(--line);
+}
+
+.profile-bio {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+.member-list {
+    list-style: none;
+    padding: 0;
+    display: grid;
+    gap: 8px;
+}
+
+#profile-form, #avatar-form {
+    margin-top: 16px;
+}
+
+.assessment-question, .assessment-submission {
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 16px;
+    margin: 16px 0;
+    min-width: 0;
+}
+
+.assessment-options label {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    color: var(--text);
+    overflow-wrap: anywhere;
+}
+
+.assessment-options input[type="radio"] {
+    width: auto;
+    flex: 0 0 auto;
+}
+
+#quiz-timer {
+    font-weight: 700;
+    color: var(--brand);
+}

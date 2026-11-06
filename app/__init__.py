@@ -1,15 +1,20 @@
 import os
-import threading
 
+from dotenv import load_dotenv
 from flask import Flask, g, jsonify, request
 
+from app.api.assessments import bp as assessments_bp
+from app.api.assessments import remove_submission_files, submission_files
 from app.api.audit import write_audit
 from app.api.auth import auth_bp
 from app.api.errors import register_error_handlers
 from app.api.gate import register_gate
 from app.api.guards import require_role
+from app.api.learning import bp as learning_bp
+from app.api.learning import course_materials, remove_material_files
 from app.api.logout import bp as logout_bp
 from app.api.pages import bp as pages_bp
+from app.api.profiles import bp as profiles_bp
 from app.api.reset import bp as reset_bp
 from app.api.schemas import (
     validate_course_body,
@@ -30,7 +35,7 @@ from app.api.services import (
     update_grade,
 )
 from app.api.signup import bp as signup_bp
-from app.api.store import SEED_PATH, load_seed
+from app.api.store import BASE_DIR, SEED_PATH
 
 # ============================================================
 # SEC-07: CONTENT SECURITY POLICY
@@ -40,7 +45,7 @@ CSP_POLICY = (
     "default-src 'self'; "
     "script-src 'self'; "
     "style-src 'self'; "
-    "img-src 'self' data:; "
+    "img-src 'self' data: blob:; "
     "font-src 'self'; "
     "connect-src 'self'; "
     "object-src 'none'; "
@@ -51,6 +56,7 @@ CSP_POLICY = (
 
 
 def create_app(config=None):
+    load_dotenv(BASE_DIR / ".env")
     app = Flask(__name__)
 
     # ========================================================
@@ -68,21 +74,23 @@ def create_app(config=None):
         RESET_TOKEN_TTL_SECONDS=int(os.environ.get("RESET_TOKEN_TTL_SECONDS", "900")),
         RESET_TOKEN_ECHO=os.environ.get("RESET_TOKEN_ECHO") == "1",
         BCRYPT_ROUNDS=int(os.environ.get("BCRYPT_ROUNDS", "12")),
-        LMS_STORE=os.environ.get("LMS_STORE", "memory").lower(),
-        SQLITE_PATH=os.environ.get(
-            "SQLITE_PATH",
-            "instance/mini_lms.sqlite3",
-        ),
-        RATE_LIMIT_DB_PATH=os.environ.get(
-            "RATE_LIMIT_DB_PATH",
-            "instance/rate_limits.sqlite3",
-        ),
+        DATABASE_URL=os.environ.get("DATABASE_URL"),
+        DATABASE_SCHEMA=os.environ.get("DATABASE_SCHEMA", "public"),
         LOGIN_MAX_FAILED_ATTEMPTS=int(os.environ.get("LOGIN_MAX_FAILED_ATTEMPTS", "5")),
         LOGIN_LOCK_DURATION_SECONDS=int(
             os.environ.get("LOGIN_LOCK_DURATION_SECONDS", "900")
         ),
         # Local email simulation (development only).
         LOCAL_EMAIL_ENABLED=os.environ.get("LOCAL_EMAIL_ENABLED") == "1",
+        MATERIAL_UPLOAD_DIR=os.environ.get(
+            "MATERIAL_UPLOAD_DIR", os.path.join(app.instance_path, "materials")
+        ),
+        SUBMISSION_UPLOAD_DIR=os.environ.get(
+            "SUBMISSION_UPLOAD_DIR", os.path.join(app.instance_path, "submissions")
+        ),
+        AVATAR_UPLOAD_DIR=os.environ.get(
+            "AVATAR_UPLOAD_DIR", os.path.join(app.instance_path, "avatars")
+        ),
     )
 
     # Allow tests to override configuration.
@@ -102,30 +110,18 @@ def create_app(config=None):
     # 3. INITIALIZE STORAGE BACKEND
     # ========================================================
 
-    if app.config["LMS_STORE"] == "memory":
-        store = load_seed(bcrypt_rounds=app.config["BCRYPT_ROUNDS"])
+    from app.database.db import build_postgres_store
 
-    elif app.config["LMS_STORE"] == "sqlite":
-        from app.database.db import build_sqlite_store
-
-        store = build_sqlite_store(
-            app.config["SQLITE_PATH"],
-            seed_path=SEED_PATH,
-            bcrypt_rounds=app.config["BCRYPT_ROUNDS"],
-        )
-
-    else:
-        raise ValueError("LMS_STORE phải là 'memory' hoặc 'sqlite'")
+    if not app.config["DATABASE_URL"]:
+        raise RuntimeError("DATABASE_URL is required; configure PostgreSQL in .env")
+    store = build_postgres_store(
+        app.config["DATABASE_URL"],
+        schema=app.config["DATABASE_SCHEMA"],
+        seed_path=SEED_PATH,
+        bcrypt_rounds=app.config["BCRYPT_ROUNDS"],
+    )
 
     app.extensions["lms_store"] = store
-
-    # Password reset token storage for Memory backend.
-    app.extensions["lms_reset_tokens"] = {}
-    app.extensions["lms_reset_lock"] = threading.Lock()
-
-    # JWT revocation storage for Memory backend.
-    app.extensions["lms_revoked_tokens"] = {}
-    app.extensions["lms_revoked_tokens_lock"] = threading.Lock()
 
     configure_store(store)
 
@@ -172,6 +168,9 @@ def create_app(config=None):
     app.register_blueprint(signup_bp)
     app.register_blueprint(reset_bp)
     app.register_blueprint(pages_bp)
+    app.register_blueprint(profiles_bp)
+    app.register_blueprint(learning_bp)
+    app.register_blueprint(assessments_bp)
 
     if app.config["ENABLE_EXTENSIONS"]:
         from app.database import register_extensions
@@ -217,22 +216,12 @@ def create_app(config=None):
         data = request.get_json(silent=True)
         score = validate_score_body(data)
 
-        if isinstance(store, dict):
-            old_score = next(
-                (
-                    item["score"]
-                    for item in store["enrollments"]
-                    if item["courseId"] == course_id and item["studentId"] == student_id
-                ),
-                None,
-            )
-        else:
-            enrollment = store.get_enrollment(
-                course_id,
-                student_id,
-            )
+        enrollment = store.get_enrollment(
+            course_id,
+            student_id,
+        )
 
-            old_score = enrollment.score if enrollment is not None else None
+        old_score = enrollment.score if enrollment is not None else None
 
         result = update_grade(
             g.actor,
@@ -259,12 +248,23 @@ def create_app(config=None):
 
     @app.get("/courses")
     def list_courses_route():
-        return jsonify(list_courses(store=store)), 200
+        return jsonify(
+            list_courses(
+                store=store,
+                query=request.args.get("q", "").strip(),
+                instructor_id=request.args.get("instructorId", "").strip(),
+            )
+        ), 200
 
     @app.post("/courses")
-    @require_role("ADMIN")
+    @require_role("ADMIN", "INSTRUCTOR")
     def create_course_route():
-        title, instructor_id = validate_course_body(request.get_json(silent=True))
+        title, instructor_id = validate_course_body(
+            request.get_json(silent=True),
+            default_instructor=g.actor["id"]
+            if g.actor["role"] == "INSTRUCTOR"
+            else None,
+        )
         result = create_course(g.actor, title, instructor_id, store=store)
 
         write_audit(
@@ -277,7 +277,7 @@ def create_app(config=None):
         return jsonify(result), 201
 
     @app.put("/courses/<course_id>")
-    @require_role("ADMIN")
+    @require_role("ADMIN", "INSTRUCTOR")
     def update_course_route(course_id):
         title, instructor_id = validate_course_update(request.get_json(silent=True))
         result = update_course(
@@ -300,7 +300,11 @@ def create_app(config=None):
     @app.delete("/courses/<course_id>")
     @require_role("ADMIN")
     def delete_course_route(course_id):
+        materials = course_materials(store, course_id)
+        submissions = submission_files(store, course_id)
         delete_course(g.actor, course_id, store=store)
+        remove_material_files(materials)
+        remove_submission_files(submissions)
 
         write_audit(
             actor_id=g.actor["id"],

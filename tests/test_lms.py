@@ -1,7 +1,6 @@
 import base64
 import hashlib
 import json
-import sqlite3
 import time
 from pathlib import Path
 
@@ -11,18 +10,10 @@ import pytest
 from app import create_app
 from app.api.errors import Forbidden
 from app.api.services import update_grade
+from tests.db_helpers import schema_for
 
 SECRET = "test-secret-for-local-pytest-only-0123456789abcdef"
 PASSWORD = "Lms@2026"
-
-
-@pytest.fixture(autouse=True)
-def isolate_rate_limit_database(tmp_path, monkeypatch):
-    """Give each test its own rate-limit SQLite database."""
-    monkeypatch.setenv(
-        "RATE_LIMIT_DB_PATH",
-        str(tmp_path / "rate_limits.sqlite3"),
-    )
 
 
 # ==========================================
@@ -397,9 +388,11 @@ def test_a16_new_route(tmp_path):
 
 
 def test_a17_missing_secret(monkeypatch):
+    # Test a missing secret independently of a developer's local .env file.
+    monkeypatch.setattr("app.load_dotenv", lambda *args, **kwargs: False)
     monkeypatch.delenv("JWT_SECRET", raising=False)
 
-    with pytest.raises(RuntimeError):
+    with pytest.raises(RuntimeError, match="JWT_SECRET"):
         create_app()
 
 
@@ -510,7 +503,7 @@ def test_json_error_responses(client):
 # ==========================================
 
 
-def test_independent_app_state(tmp_path):
+def test_app_instances_share_postgres_state(tmp_path):
     config = {
         "TESTING": True,
         "JWT_SECRET": SECRET,
@@ -525,13 +518,12 @@ def test_independent_app_state(tmp_path):
 
     assert store1 is not store2
 
-    store1["enrollments"][0]["score"] = 2
+    store1.set_score("c1", "u4", 2)
+    assert store2.get_enrollment("c1", "u4").score == 2
+    from app.api.store import LoginAttempt
 
-    assert store2["enrollments"][0]["score"] == 7.5
-
-    store1["failed_logins"]["fake@example.com"] = {"count": 5}
-
-    assert store2["failed_logins"] == {}
+    store1.save_attempt("fake@example.com", LoginAttempt(failures=5))
+    assert store2.get_attempt("fake@example.com").failures == 5
 
 
 # ==========================================
@@ -579,7 +571,7 @@ def test_error_checking_order(client):
     )
 
 
-@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+@pytest.mark.parametrize("backend", ["postgresql"])
 def test_optional_extensions_work_with_store_backends(tmp_path, backend):
     config = {
         "TESTING": True,
@@ -588,8 +580,7 @@ def test_optional_extensions_work_with_store_backends(tmp_path, backend):
         "ENABLE_EXTENSIONS": True,
         "RESET_TOKEN_ECHO": True,
         "BCRYPT_ROUNDS": 4,
-        "LMS_STORE": backend,
-        "SQLITE_PATH": str(tmp_path / f"{backend}.sqlite3"),
+        "DATABASE_SCHEMA": schema_for(str(tmp_path / f"{backend}.postgresql")),
     }
     test_app = create_app(config)
     client = test_app.test_client()
@@ -629,11 +620,11 @@ def test_optional_extensions_work_with_store_backends(tmp_path, backend):
 
 
 # ==========================================
-# JWT TOKEN VERSIONING - MEMORY AND SQLITE
+# JWT TOKEN VERSIONING - POSTGRESQL
 # ==========================================
 
 
-@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+@pytest.mark.parametrize("backend", ["postgresql"])
 def test_password_reset_revokes_old_jwt(tmp_path, backend):
     config = {
         "TESTING": True,
@@ -642,8 +633,9 @@ def test_password_reset_revokes_old_jwt(tmp_path, backend):
         "ENABLE_EXTENSIONS": True,
         "RESET_TOKEN_ECHO": True,
         "BCRYPT_ROUNDS": 4,
-        "LMS_STORE": backend,
-        "SQLITE_PATH": str(tmp_path / f"revocation_{backend}.sqlite3"),
+        "DATABASE_SCHEMA": schema_for(
+            str(tmp_path / f"revocation_{backend}.postgresql")
+        ),
     }
 
     test_app = create_app(config)
@@ -743,14 +735,18 @@ def rate_limit_client(tmp_path, backend, suffix):
         "ENABLE_EXTENSIONS": True,
         "RESET_TOKEN_ECHO": True,
         "BCRYPT_ROUNDS": 4,
-        "LMS_STORE": backend,
-        "SQLITE_PATH": str(tmp_path / f"rate_{backend}_{suffix}.sqlite3"),
+        "DATABASE_SCHEMA": schema_for(
+            str(tmp_path / f"rate_{backend}_{suffix}.postgresql")
+        ),
     }
     return create_app(config).test_client()
 
 
-@pytest.mark.parametrize("backend", ["memory", "sqlite"])
-def test_forgot_password_email_rate_limit(tmp_path, backend):
+@pytest.mark.parametrize("backend", ["postgresql"])
+def test_forgot_password_email_rate_limit(tmp_path, backend, monkeypatch):
+    import app.api.rate_limit as rate_limit_module
+
+    monkeypatch.setattr(rate_limit_module.time, "time", lambda: 1000.0)
     c = rate_limit_client(tmp_path, backend, "email")
     email = "chi.sv@lms.test"
 
@@ -768,7 +764,7 @@ def test_forgot_password_email_rate_limit(tmp_path, backend):
     assert response.get_json() == {"status": "sent"}
 
 
-@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+@pytest.mark.parametrize("backend", ["postgresql"])
 def test_forgot_password_ip_rate_limit(tmp_path, backend):
     c = rate_limit_client(tmp_path, backend, "ip")
 
@@ -783,8 +779,11 @@ def test_forgot_password_ip_rate_limit(tmp_path, backend):
     assert_error(response, 429, "RATE_LIMITED")
 
 
-@pytest.mark.parametrize("backend", ["memory", "sqlite"])
-def test_reset_password_ip_rate_limit(tmp_path, backend):
+@pytest.mark.parametrize("backend", ["postgresql"])
+def test_reset_password_ip_rate_limit(tmp_path, backend, monkeypatch):
+    import app.api.rate_limit as rate_limit_module
+
+    monkeypatch.setattr(rate_limit_module.time, "time", lambda: 1000.0)
     c = rate_limit_client(tmp_path, backend, "reset")
 
     for _ in range(5):
@@ -803,22 +802,18 @@ def test_reset_password_ip_rate_limit(tmp_path, backend):
 
 
 # ==========================================
-# APP ISOLATION AND RATE-LIMIT MEMORY CLEANUP
+# APP ISOLATION AND RATE-LIMIT CLEANUP
 # ==========================================
 
 
-@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+@pytest.mark.parametrize("backend", ["postgresql"])
 def test_rate_limit_shared_between_apps(tmp_path, backend):
     first = rate_limit_client(
         tmp_path,
         backend,
         "shared_first",
     )
-    second = rate_limit_client(
-        tmp_path,
-        backend,
-        "shared_second",
-    )
+    second = create_app(dict(first.application.config)).test_client()
 
     email = "shared@lms.test"
 
@@ -839,9 +834,8 @@ def test_rate_limit_shared_between_apps(tmp_path, backend):
     assert int(response.headers["Retry-After"]) > 0
 
 
-@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+@pytest.mark.parametrize("backend", ["postgresql"])
 def test_rate_limit_expired_keys_are_cleaned_up(tmp_path, backend, monkeypatch):
-    import sqlite3
 
     import app.api.rate_limit as rate_limit_module
 
@@ -858,10 +852,10 @@ def test_rate_limit_expired_keys_are_cleaned_up(tmp_path, backend, monkeypatch):
         )
         assert response.status_code == 202
 
-    db_path = c.application.config["RATE_LIMIT_DB_PATH"]
+    store = c.application.extensions["lms_store"]
 
-    with sqlite3.connect(db_path) as conn:
-        before = conn.execute("SELECT COUNT(*) FROM rate_limits").fetchone()[0]
+    with store._connect() as conn:
+        before = conn.execute("SELECT COUNT(*) AS n FROM rate_limits").fetchone()["n"]
 
     assert before > 0
 
@@ -874,17 +868,17 @@ def test_rate_limit_expired_keys_are_cleaned_up(tmp_path, backend, monkeypatch):
     )
     assert response.status_code == 202
 
-    with sqlite3.connect(db_path) as conn:
+    with store._connect() as conn:
         expired = conn.execute(
-            "SELECT COUNT(*) FROM rate_limits WHERE expires_at <= ?",
+            "SELECT COUNT(*) AS n FROM rate_limits WHERE expires_at <= %s",
             (clock[0],),
-        ).fetchone()[0]
+        ).fetchone()["n"]
 
     assert expired == 0
 
 
 # ==========================================
-# HASHED RESET TOKEN - MEMORY AND SQLITE
+# HASHED RESET TOKEN - POSTGRESQL
 # ==========================================
 
 
@@ -894,11 +888,12 @@ def hashed_token_client(tmp_path, backend, suffix):
         "JWT_SECRET": SECRET,
         "AUDIT_LOG_PATH": str(tmp_path / f"hashed_{backend}_{suffix}.log"),
         "ENABLE_EXTENSIONS": True,
-        "RESET_TOKEN_ECHO": True,  # Test-only: expose token to test client.
+        "RESET_TOKEN_ECHO": True,
         "RESET_TOKEN_TTL_SECONDS": 900,
         "BCRYPT_ROUNDS": 4,
-        "LMS_STORE": backend,
-        "SQLITE_PATH": str(tmp_path / f"hashed_{backend}_{suffix}.sqlite3"),
+        "DATABASE_SCHEMA": schema_for(
+            str(tmp_path / f"hashed_{backend}_{suffix}.postgresql")
+        ),
     }
     test_app = create_app(config)
     return test_app, test_app.test_client()
@@ -910,28 +905,24 @@ def issue_reset_token(client):
     return response.get_json()["resetToken"]
 
 
-@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+@pytest.mark.parametrize("backend", ["postgresql"])
 def test_reset_token_only_hash_is_stored(tmp_path, backend):
     test_app, client = hashed_token_client(tmp_path, backend, "storage")
     token = issue_reset_token(client)
     digest = hashlib.sha256(token.encode("utf-8")).hexdigest()
 
-    if backend == "memory":
-        records = test_app.extensions["lms_reset_tokens"]
-        assert token not in records
-        assert digest in records
-        assert len(records) == 1
-    else:
-        with sqlite3.connect(test_app.config["SQLITE_PATH"]) as conn:
-            stored = [row[0] for row in conn.execute("SELECT token FROM reset_tokens")]
-        assert token not in stored
-        assert stored == [digest]
+    with test_app.extensions["lms_store"]._connect() as conn:
+        stored = [
+            row["token"] for row in conn.execute("SELECT token FROM reset_tokens")
+        ]
+    assert token not in stored
+    assert stored == [digest]
 
     assert token != digest
     assert len(digest) == 64
 
 
-@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+@pytest.mark.parametrize("backend", ["postgresql"])
 def test_hashed_reset_token_is_one_time(tmp_path, backend):
     _, client = hashed_token_client(tmp_path, backend, "one_time")
     token = issue_reset_token(client)
@@ -945,9 +936,9 @@ def test_hashed_reset_token_is_one_time(tmp_path, backend):
     assert_error(second, 400, "VALIDATION_ERROR")
 
 
-@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+@pytest.mark.parametrize("backend", ["postgresql"])
 def test_hashed_reset_token_expiry(tmp_path, backend, monkeypatch):
-    import app.api.reset as reset_module
+    import app.database.db as reset_module
 
     _, client = hashed_token_client(tmp_path, backend, "expired")
     token = issue_reset_token(client)
@@ -968,14 +959,13 @@ def test_hashed_reset_token_expiry(tmp_path, backend, monkeypatch):
 # ==========================================
 
 
-@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+@pytest.mark.parametrize("backend", ["postgresql"])
 def test_logout_revokes_only_current_jwt(tmp_path, backend):
     config = {
         "TESTING": True,
         "JWT_SECRET": SECRET,
         "AUDIT_LOG_PATH": str(tmp_path / f"logout_{backend}.log"),
-        "LMS_STORE": backend,
-        "SQLITE_PATH": str(tmp_path / f"logout_{backend}.sqlite3"),
+        "DATABASE_SCHEMA": schema_for(str(tmp_path / f"logout_{backend}.postgresql")),
         "BCRYPT_ROUNDS": 4,
     }
     test_app = create_app(config)
@@ -992,19 +982,18 @@ def test_logout_revokes_only_current_jwt(tmp_path, backend):
     assert c.get("/me", headers=headers(second)).status_code == 200
 
 
-@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+@pytest.mark.parametrize("backend", ["postgresql"])
 def test_logout_requires_authentication(tmp_path, backend):
     c = rate_limit_client(tmp_path, backend, "logout_no_auth")
     assert_error(c.post("/auth/logout"), 401, "UNAUTHENTICATED")
 
 
-def test_sqlite_logout_survives_app_restart(tmp_path):
+def test_postgres_logout_survives_app_restart(tmp_path):
     config = {
         "TESTING": True,
         "JWT_SECRET": SECRET,
         "AUDIT_LOG_PATH": str(tmp_path / "logout_restart.log"),
-        "LMS_STORE": "sqlite",
-        "SQLITE_PATH": str(tmp_path / "logout_restart.sqlite3"),
+        "DATABASE_SCHEMA": schema_for(str(tmp_path / "logout_restart.postgresql")),
         "BCRYPT_ROUNDS": 4,
     }
     first_app = create_app(config)
@@ -1019,7 +1008,7 @@ def test_sqlite_logout_survives_app_restart(tmp_path):
     )
 
 
-@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+@pytest.mark.parametrize("backend", ["postgresql"])
 def test_rate_limit_window_expires(tmp_path, backend, monkeypatch):
     import app.api.rate_limit as rate_limit_module
 
@@ -1051,7 +1040,7 @@ def test_rate_limit_window_expires(tmp_path, backend, monkeypatch):
     assert response.status_code == 202
 
 
-@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+@pytest.mark.parametrize("backend", ["postgresql"])
 def test_account_soft_lockout_expires(tmp_path, backend, monkeypatch):
     """A soft-locked account unlocks automatically after the lock duration."""
     import app.api.auth as auth_module
@@ -1115,7 +1104,7 @@ def test_account_soft_lockout_expires(tmp_path, backend, monkeypatch):
     assert "accessToken" in response.get_json()
 
 
-@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+@pytest.mark.parametrize("backend", ["postgresql"])
 def test_sec04_duplicate_registration(tmp_path, backend):
     """Prevent duplicate account registration."""
 
@@ -1133,7 +1122,7 @@ def test_sec04_duplicate_registration(tmp_path, backend):
     assert_error(second, 400, "VALIDATION_ERROR")
 
 
-@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+@pytest.mark.parametrize("backend", ["postgresql"])
 def test_sec04_concurrent_registration(tmp_path, backend):
     """Concurrent registrations must not create duplicate accounts."""
     from concurrent.futures import ThreadPoolExecutor
@@ -1145,8 +1134,9 @@ def test_sec04_concurrent_registration(tmp_path, backend):
             "JWT_SECRET": SECRET,
             "ENABLE_EXTENSIONS": True,
             "BCRYPT_ROUNDS": 4,
-            "LMS_STORE": backend,
-            "SQLITE_PATH": str(tmp_path / f"sec04_concurrent_{backend}.sqlite3"),
+            "DATABASE_SCHEMA": schema_for(
+                str(tmp_path / f"sec04_concurrent_{backend}.postgresql")
+            ),
             "AUDIT_LOG_PATH": str(tmp_path / f"sec04_concurrent_{backend}.log"),
         }
     )
@@ -1176,18 +1166,10 @@ def test_sec04_concurrent_registration(tmp_path, backend):
 
     store = app.extensions["lms_store"]
 
-    if isinstance(store, dict):
-        users = [
-            user
-            for user in store["users"].values()
-            if user["email"] == "sec04-race@lms.test"
-        ]
-        assert len(users) == 1
-    else:
-        assert store.find_user_by_email("sec04-race@lms.test") is not None
+    assert store.find_user_by_email("sec04-race@lms.test") is not None
 
 
-@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+@pytest.mark.parametrize("backend", ["postgresql"])
 def test_sec04_registration_rate_limit(tmp_path, backend):
     """Sixth registration request from the same IP must be blocked."""
 
@@ -1215,7 +1197,7 @@ def test_sec04_registration_rate_limit(tmp_path, backend):
     assert int(response.headers["Retry-After"]) > 0
 
 
-@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+@pytest.mark.parametrize("backend", ["postgresql"])
 def test_sec04_prevent_admin_registration(tmp_path, backend):
     """Users must not assign themselves an ADMIN role."""
 
@@ -1233,7 +1215,7 @@ def test_sec04_prevent_admin_registration(tmp_path, backend):
     assert_error(response, 400, "VALIDATION_ERROR")
 
 
-@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+@pytest.mark.parametrize("backend", ["postgresql"])
 def test_sec04_concurrent_unique_accounts(tmp_path, backend):
     """Concurrent registrations must create unique user IDs."""
     from concurrent.futures import ThreadPoolExecutor
@@ -1245,8 +1227,9 @@ def test_sec04_concurrent_unique_accounts(tmp_path, backend):
             "JWT_SECRET": SECRET,
             "ENABLE_EXTENSIONS": True,
             "BCRYPT_ROUNDS": 4,
-            "LMS_STORE": backend,
-            "SQLITE_PATH": str(tmp_path / f"sec04_unique_{backend}.sqlite3"),
+            "DATABASE_SCHEMA": schema_for(
+                str(tmp_path / f"sec04_unique_{backend}.postgresql")
+            ),
             "AUDIT_LOG_PATH": str(tmp_path / f"sec04_unique_{backend}.log"),
         }
     )
@@ -1285,7 +1268,7 @@ def test_sec04_concurrent_unique_accounts(tmp_path, backend):
 # ============================================================
 
 
-@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+@pytest.mark.parametrize("backend", ["postgresql"])
 def test_sec05_reset_success(tmp_path, backend):
     """Successful reset must update password and consume token."""
     import hashlib
@@ -1297,38 +1280,25 @@ def test_sec05_reset_success(tmp_path, backend):
             "TESTING": True,
             "JWT_SECRET": SECRET,
             "BCRYPT_ROUNDS": 4,
-            "LMS_STORE": backend,
-            "SQLITE_PATH": str(tmp_path / f"sec05_success_{backend}.sqlite3"),
-            "AUDIT_LOG_PATH": str(tmp_path / f"sec05_success_{backend}.log"),
-            "RATE_LIMIT_DB_PATH": str(
-                tmp_path / f"sec05_success_{backend}_rate.sqlite3"
+            "DATABASE_SCHEMA": schema_for(
+                str(tmp_path / f"sec05_success_{backend}.postgresql")
             ),
+            "AUDIT_LOG_PATH": str(tmp_path / f"sec05_success_{backend}.log"),
         }
     )
 
     store = app.extensions["lms_store"]
 
-    if isinstance(store, dict):
-        user = next(iter(store["users"].values()))
-        user_id = user["id"]
-        old_hash = user["password_hash"]
-        old_version = user["token_version"]
-    else:
-        with store._connect() as conn:
-            row = conn.execute("SELECT * FROM users LIMIT 1").fetchone()
-        user_id = row["id"]
-        old_hash = row["password_hash"]
-        old_version = row["token_version"]
+    with store._connect() as conn:
+        row = conn.execute("SELECT * FROM users LIMIT 1").fetchone()
+    user_id = row["id"]
+    old_hash = row["password_hash"]
+    old_version = row["token_version"]
 
     token = "sec05-success-token"
     token_hash = hashlib.sha256(token.encode()).hexdigest()
 
-    if isinstance(store, dict):
-        import time
-
-        app.extensions["lms_reset_tokens"][token_hash] = (user_id, time.time() + 900)
-    else:
-        store.add_reset_token(token_hash, user_id, 900)
+    store.add_reset_token(token_hash, user_id, 900)
 
     with app.test_client() as client:
         response = client.post(
@@ -1338,25 +1308,18 @@ def test_sec05_reset_success(tmp_path, backend):
 
     assert response.status_code == 200, response.get_json()
 
-    if isinstance(store, dict):
-        updated = store["users"][user_id]
-        assert updated["token_version"] == old_version + 1
-        assert updated["password_hash"] != old_hash
-        assert token_hash not in app.extensions["lms_reset_tokens"]
-    else:
-        updated = store.get_user(user_id)
-        assert updated.token_version == old_version + 1
-        assert updated.password_hash != old_hash
+    updated = store.get_user(user_id)
+    assert updated.token_version == old_version + 1
+    assert updated.password_hash != old_hash
 
-        with store._connect() as conn:
-            remaining = conn.execute(
-                "SELECT 1 FROM reset_tokens WHERE token = ?",
-                (token_hash,),
-            ).fetchone()
+    with store._connect() as conn:
+        remaining = conn.execute(
+            "SELECT 1 FROM reset_tokens WHERE token = %s",
+            (token_hash,),
+        ).fetchone()
 
-        assert remaining is None
+    assert remaining is None
 
-    # This section runs for BOTH Memory and SQLite.
     stored_hash = (
         updated["password_hash"] if isinstance(updated, dict) else updated.password_hash
     )
@@ -1367,11 +1330,10 @@ def test_sec05_reset_success(tmp_path, backend):
     )
 
 
-@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+@pytest.mark.parametrize("backend", ["postgresql"])
 def test_sec05_hash_failure_keeps_token(tmp_path, backend, monkeypatch):
     """Hashing failure must not consume the reset token."""
     import hashlib
-    import time
 
     import app.api.reset as reset_module
 
@@ -1380,33 +1342,22 @@ def test_sec05_hash_failure_keeps_token(tmp_path, backend, monkeypatch):
             "TESTING": True,
             "JWT_SECRET": SECRET,
             "BCRYPT_ROUNDS": 4,
-            "LMS_STORE": backend,
-            "SQLITE_PATH": str(tmp_path / f"sec05_hash_{backend}.sqlite3"),
-            "RATE_LIMIT_DB_PATH": str(tmp_path / f"sec05_hash_{backend}_rate.sqlite3"),
+            "DATABASE_SCHEMA": schema_for(
+                str(tmp_path / f"sec05_hash_{backend}.postgresql")
+            ),
         }
     )
     store = app.extensions["lms_store"]
 
-    if isinstance(store, dict):
-        user = next(iter(store["users"].values()))
-        user_id = user["id"]
-        old_hash = user["password_hash"]
-    else:
-        with store._connect() as conn:
-            row = conn.execute("SELECT * FROM users LIMIT 1").fetchone()
-        user_id = row["id"]
-        old_hash = row["password_hash"]
+    with store._connect() as conn:
+        row = conn.execute("SELECT * FROM users LIMIT 1").fetchone()
+    user_id = row["id"]
+    old_hash = row["password_hash"]
 
     token = "sec05-hash-failure-token"
     token_hash = hashlib.sha256(token.encode()).hexdigest()
 
-    if isinstance(store, dict):
-        app.extensions["lms_reset_tokens"][token_hash] = (
-            user_id,
-            time.time() + 900,
-        )
-    else:
-        store.add_reset_token(token_hash, user_id, 900)
+    store.add_reset_token(token_hash, user_id, 900)
 
     def fail_hash(*args, **kwargs):
         raise RuntimeError("Simulated bcrypt failure")
@@ -1426,51 +1377,40 @@ def test_sec05_hash_failure_keeps_token(tmp_path, backend, monkeypatch):
     assert response.status_code == 500
 
     # Verify token and password remain unchanged.
-    if isinstance(store, dict):
-        assert token_hash in app.extensions["lms_reset_tokens"]
-        assert store["users"][user_id]["password_hash"] == old_hash
-    else:
-        with store._connect() as conn:
-            row = conn.execute(
-                "SELECT 1 FROM reset_tokens WHERE token = ?",
-                (token_hash,),
-            ).fetchone()
+    with store._connect() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM reset_tokens WHERE token = %s",
+            (token_hash,),
+        ).fetchone()
 
-        assert row is not None
-        assert store.get_user(user_id).password_hash == old_hash
+    assert row is not None
+    assert store.get_user(user_id).password_hash == old_hash
 
 
-@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+@pytest.mark.parametrize("backend", ["postgresql"])
 def test_sec05_token_cannot_be_reused(tmp_path, backend):
     """A successfully consumed token cannot reset password twice."""
     import hashlib
-    import time
 
     app = create_app(
         {
             "TESTING": True,
             "JWT_SECRET": SECRET,
             "BCRYPT_ROUNDS": 4,
-            "LMS_STORE": backend,
-            "SQLITE_PATH": str(tmp_path / f"sec05_reuse_{backend}.sqlite3"),
-            "RATE_LIMIT_DB_PATH": str(tmp_path / f"sec05_reuse_{backend}_rate.sqlite3"),
+            "DATABASE_SCHEMA": schema_for(
+                str(tmp_path / f"sec05_reuse_{backend}.postgresql")
+            ),
         }
     )
     store = app.extensions["lms_store"]
 
-    if isinstance(store, dict):
-        user_id = next(iter(store["users"]))
-    else:
-        with store._connect() as conn:
-            user_id = conn.execute("SELECT id FROM users LIMIT 1").fetchone()["id"]
+    with store._connect() as conn:
+        user_id = conn.execute("SELECT id FROM users LIMIT 1").fetchone()["id"]
 
     token = "sec05-reuse-token"
     token_hash = hashlib.sha256(token.encode()).hexdigest()
 
-    if isinstance(store, dict):
-        app.extensions["lms_reset_tokens"][token_hash] = (user_id, time.time() + 900)
-    else:
-        store.add_reset_token(token_hash, user_id, 900)
+    store.add_reset_token(token_hash, user_id, 900)
 
     with app.test_client() as client:
         first = client.post(
@@ -1486,11 +1426,10 @@ def test_sec05_token_cannot_be_reused(tmp_path, backend):
     assert_error(second, 400, "VALIDATION_ERROR")
 
 
-@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+@pytest.mark.parametrize("backend", ["postgresql"])
 def test_sec05_concurrent_reset(tmp_path, backend):
     """Only one concurrent request may consume a reset token."""
     import hashlib
-    import time
     from concurrent.futures import ThreadPoolExecutor
     from threading import Barrier
 
@@ -1499,26 +1438,20 @@ def test_sec05_concurrent_reset(tmp_path, backend):
             "TESTING": True,
             "JWT_SECRET": SECRET,
             "BCRYPT_ROUNDS": 4,
-            "LMS_STORE": backend,
-            "SQLITE_PATH": str(tmp_path / f"sec05_race_{backend}.sqlite3"),
-            "RATE_LIMIT_DB_PATH": str(tmp_path / f"sec05_race_{backend}_rate.sqlite3"),
+            "DATABASE_SCHEMA": schema_for(
+                str(tmp_path / f"sec05_race_{backend}.postgresql")
+            ),
         }
     )
     store = app.extensions["lms_store"]
 
-    if isinstance(store, dict):
-        user_id = next(iter(store["users"]))
-    else:
-        with store._connect() as conn:
-            user_id = conn.execute("SELECT id FROM users LIMIT 1").fetchone()["id"]
+    with store._connect() as conn:
+        user_id = conn.execute("SELECT id FROM users LIMIT 1").fetchone()["id"]
 
     token = "sec05-concurrent-token"
     token_hash = hashlib.sha256(token.encode()).hexdigest()
 
-    if isinstance(store, dict):
-        app.extensions["lms_reset_tokens"][token_hash] = (user_id, time.time() + 900)
-    else:
-        store.add_reset_token(token_hash, user_id, 900)
+    store.add_reset_token(token_hash, user_id, 900)
 
     barrier = Barrier(2)
 
@@ -1538,19 +1471,16 @@ def test_sec05_concurrent_reset(tmp_path, backend):
     assert statuses == [200, 400], statuses
 
 
-def test_sec05_sqlite_rollback_on_token_delete_failure(tmp_path):
-    """SQLite must roll back password update if token deletion fails."""
+def test_sec05_postgres_rollback_on_token_delete_failure(tmp_path):
+    """PostgreSQL must roll back password update if token deletion fails."""
     import hashlib
-    import sqlite3
 
     app = create_app(
         {
             "TESTING": True,
             "JWT_SECRET": SECRET,
             "BCRYPT_ROUNDS": 4,
-            "LMS_STORE": "sqlite",
-            "SQLITE_PATH": str(tmp_path / "sec05_rollback.sqlite3"),
-            "RATE_LIMIT_DB_PATH": str(tmp_path / "sec05_rollback_rate.sqlite3"),
+            "DATABASE_SCHEMA": schema_for(str(tmp_path / "sec05_rollback.postgresql")),
             "AUDIT_LOG_PATH": str(tmp_path / "sec05_rollback.log"),
         }
     )
@@ -1575,15 +1505,18 @@ def test_sec05_sqlite_rollback_on_token_delete_failure(tmp_path):
 
     store.add_reset_token(token_hash, user_id, 900)
 
-    # 3. Simulate a SQLite failure during token deletion.
-    with sqlite3.connect(app.config["SQLITE_PATH"]) as conn:
+    # 3. Simulate a PostgreSQL failure during token deletion.
+    with store._connect() as conn:
+        conn.execute("""
+            CREATE FUNCTION sec05_fail_delete() RETURNS trigger LANGUAGE plpgsql AS $$
+            BEGIN RAISE EXCEPTION 'Simulated token deletion failure'; END;
+            $$
+        """)
         conn.execute(
             """
             CREATE TRIGGER sec05_fail_token_delete
             BEFORE DELETE ON reset_tokens
-            BEGIN
-                SELECT RAISE(ABORT, 'Simulated token deletion failure');
-            END;
+            FOR EACH ROW EXECUTE FUNCTION sec05_fail_delete();
             """
         )
 
@@ -1606,13 +1539,13 @@ def test_sec05_sqlite_rollback_on_token_delete_failure(tmp_path):
             """
             SELECT password_hash, token_version
             FROM users
-            WHERE id = ?
+            WHERE id = %s
             """,
             (user_id,),
         ).fetchone()
 
         remaining_token = conn.execute(
-            "SELECT token FROM reset_tokens WHERE token = ?",
+            "SELECT token FROM reset_tokens WHERE token = %s",
             (token_hash,),
         ).fetchone()
 
@@ -1628,8 +1561,9 @@ def test_sec05_sqlite_rollback_on_token_delete_failure(tmp_path):
     assert remaining_token is not None
 
     # 6. Remove simulated database failure.
-    with sqlite3.connect(app.config["SQLITE_PATH"]) as conn:
-        conn.execute("DROP TRIGGER sec05_fail_token_delete")
+    with store._connect() as conn:
+        conn.execute("DROP TRIGGER sec05_fail_token_delete ON reset_tokens")
+        conn.execute("DROP FUNCTION sec05_fail_delete()")
 
     # 7. Retry with the same token after database recovery.
     with app.test_client() as client:
@@ -1650,13 +1584,13 @@ def test_sec05_sqlite_rollback_on_token_delete_failure(tmp_path):
             """
             SELECT password_hash, token_version
             FROM users
-            WHERE id = ?
+            WHERE id = %s
             """,
             (user_id,),
         ).fetchone()
 
         final_token = conn.execute(
-            "SELECT token FROM reset_tokens WHERE token = ?",
+            "SELECT token FROM reset_tokens WHERE token = %s",
             (token_hash,),
         ).fetchone()
 
@@ -1670,7 +1604,7 @@ def test_sec05_sqlite_rollback_on_token_delete_failure(tmp_path):
 # ============================================================
 
 
-@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+@pytest.mark.parametrize("backend", ["postgresql"])
 def test_sec06_generic_forgot_response(tmp_path, backend):
     """Existing and unknown emails must receive the same response."""
     app = create_app(
@@ -1678,24 +1612,19 @@ def test_sec06_generic_forgot_response(tmp_path, backend):
             "TESTING": True,
             "JWT_SECRET": SECRET,
             "BCRYPT_ROUNDS": 4,
-            "LMS_STORE": backend,
             "RESET_TOKEN_ECHO": False,
-            "SQLITE_PATH": str(tmp_path / f"sec06_generic_{backend}.sqlite3"),
-            "RATE_LIMIT_DB_PATH": str(
-                tmp_path / f"sec06_generic_{backend}_rate.sqlite3"
+            "DATABASE_SCHEMA": schema_for(
+                str(tmp_path / f"sec06_generic_{backend}.postgresql")
             ),
         }
     )
 
     store = app.extensions["lms_store"]
 
-    if isinstance(store, dict):
-        existing_email = next(iter(store["users"].values()))["email"]
-    else:
-        with store._connect() as conn:
-            existing_email = conn.execute("SELECT email FROM users LIMIT 1").fetchone()[
-                "email"
-            ]
+    with store._connect() as conn:
+        existing_email = conn.execute("SELECT email FROM users LIMIT 1").fetchone()[
+            "email"
+        ]
 
     with app.test_client() as client:
         existing = client.post(
@@ -1714,7 +1643,7 @@ def test_sec06_generic_forgot_response(tmp_path, backend):
     assert existing.get_json() == {"status": "sent"}
 
 
-@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+@pytest.mark.parametrize("backend", ["postgresql"])
 def test_sec06_equal_email_rate_limits(tmp_path, backend):
     """Existing and unknown emails must share the same rate-limit policy."""
     app = create_app(
@@ -1722,22 +1651,19 @@ def test_sec06_equal_email_rate_limits(tmp_path, backend):
             "TESTING": True,
             "JWT_SECRET": SECRET,
             "BCRYPT_ROUNDS": 4,
-            "LMS_STORE": backend,
             "RESET_TOKEN_ECHO": False,
-            "SQLITE_PATH": str(tmp_path / f"sec06_limit_{backend}.sqlite3"),
-            "RATE_LIMIT_DB_PATH": str(tmp_path / f"sec06_limit_{backend}_rate.sqlite3"),
+            "DATABASE_SCHEMA": schema_for(
+                str(tmp_path / f"sec06_limit_{backend}.postgresql")
+            ),
         }
     )
 
     store = app.extensions["lms_store"]
 
-    if isinstance(store, dict):
-        existing_email = next(iter(store["users"].values()))["email"]
-    else:
-        with store._connect() as conn:
-            existing_email = conn.execute("SELECT email FROM users LIMIT 1").fetchone()[
-                "email"
-            ]
+    with store._connect() as conn:
+        existing_email = conn.execute("SELECT email FROM users LIMIT 1").fetchone()[
+            "email"
+        ]
 
     emails = [
         existing_email,
@@ -1762,7 +1688,7 @@ def test_sec06_equal_email_rate_limits(tmp_path, backend):
             assert int(response.headers["Retry-After"]) > 0
 
 
-@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+@pytest.mark.parametrize("backend", ["postgresql"])
 def test_sec06_no_token_echo_in_production(tmp_path, backend):
     """Production responses must never expose reset tokens."""
     app = create_app(
@@ -1770,24 +1696,19 @@ def test_sec06_no_token_echo_in_production(tmp_path, backend):
             "TESTING": False,
             "JWT_SECRET": SECRET,
             "BCRYPT_ROUNDS": 4,
-            "LMS_STORE": backend,
             "RESET_TOKEN_ECHO": True,
-            "SQLITE_PATH": str(tmp_path / f"sec06_production_{backend}.sqlite3"),
-            "RATE_LIMIT_DB_PATH": str(
-                tmp_path / f"sec06_production_{backend}_rate.sqlite3"
+            "DATABASE_SCHEMA": schema_for(
+                str(tmp_path / f"sec06_production_{backend}.postgresql")
             ),
         }
     )
 
     store = app.extensions["lms_store"]
 
-    if isinstance(store, dict):
-        existing_email = next(iter(store["users"].values()))["email"]
-    else:
-        with store._connect() as conn:
-            existing_email = conn.execute("SELECT email FROM users LIMIT 1").fetchone()[
-                "email"
-            ]
+    with store._connect() as conn:
+        existing_email = conn.execute("SELECT email FROM users LIMIT 1").fetchone()[
+            "email"
+        ]
 
     with app.test_client() as client:
         response = client.post(
@@ -1811,13 +1732,14 @@ def course_client(tmp_path, backend, suffix):
         "JWT_SECRET": SECRET,
         "AUDIT_LOG_PATH": str(tmp_path / f"courses_{backend}_{suffix}.log"),
         "BCRYPT_ROUNDS": 4,
-        "LMS_STORE": backend,
-        "SQLITE_PATH": str(tmp_path / f"courses_{backend}_{suffix}.sqlite3"),
+        "DATABASE_SCHEMA": schema_for(
+            str(tmp_path / f"courses_{backend}_{suffix}.postgresql")
+        ),
     }
     return create_app(config).test_client()
 
 
-@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+@pytest.mark.parametrize("backend", ["postgresql"])
 def test_list_courses(tmp_path, backend):
     c = course_client(tmp_path, backend, "list")
     h = headers(token_for(c, "chi.sv@lms.test"))
@@ -1829,13 +1751,13 @@ def test_list_courses(tmp_path, backend):
     assert all({"id", "title", "instructorId"} <= set(course) for course in courses)
 
 
-@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+@pytest.mark.parametrize("backend", ["postgresql"])
 def test_list_courses_requires_auth(tmp_path, backend):
     c = course_client(tmp_path, backend, "auth")
     assert_error(c.get("/courses"), 401, "UNAUTHENTICATED")
 
 
-@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+@pytest.mark.parametrize("backend", ["postgresql"])
 def test_create_course_admin(tmp_path, backend):
     c = course_client(tmp_path, backend, "create")
     h = headers(token_for(c, "admin@lms.test"))
@@ -1854,10 +1776,10 @@ def test_create_course_admin(tmp_path, backend):
     assert any(course["id"] == body["id"] for course in listed)
 
 
-@pytest.mark.parametrize("backend", ["memory", "sqlite"])
-def test_create_course_forbidden_for_non_admin(tmp_path, backend):
+@pytest.mark.parametrize("backend", ["postgresql"])
+def test_create_course_forbidden_for_student(tmp_path, backend):
     c = course_client(tmp_path, backend, "create_forbidden")
-    for email in ("an.gv@lms.test", "chi.sv@lms.test"):
+    for email in ("chi.sv@lms.test",):
         h = headers(token_for(c, email))
         response = c.post(
             "/courses",
@@ -1867,7 +1789,7 @@ def test_create_course_forbidden_for_non_admin(tmp_path, backend):
         assert_error(response, 403, "FORBIDDEN")
 
 
-@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+@pytest.mark.parametrize("backend", ["postgresql"])
 def test_create_course_requires_instructor(tmp_path, backend):
     c = course_client(tmp_path, backend, "create_instr")
     h = headers(token_for(c, "admin@lms.test"))
@@ -1879,7 +1801,7 @@ def test_create_course_requires_instructor(tmp_path, backend):
     assert_error(response, 400, "VALIDATION_ERROR")
 
 
-@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+@pytest.mark.parametrize("backend", ["postgresql"])
 def test_update_course_admin(tmp_path, backend):
     c = course_client(tmp_path, backend, "update")
     h = headers(token_for(c, "admin@lms.test"))
@@ -1889,15 +1811,15 @@ def test_update_course_admin(tmp_path, backend):
     assert response.get_json()["instructorId"] == "u2"
 
 
-@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+@pytest.mark.parametrize("backend", ["postgresql"])
 def test_update_course_forbidden(tmp_path, backend):
     c = course_client(tmp_path, backend, "update_forbidden")
-    h = headers(token_for(c, "an.gv@lms.test"))
+    h = headers(token_for(c, "binh.gv@lms.test"))
     response = c.put("/courses/c1", json={"title": "X"}, headers=h)
     assert_error(response, 403, "FORBIDDEN")
 
 
-@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+@pytest.mark.parametrize("backend", ["postgresql"])
 def test_delete_course_admin(tmp_path, backend):
     c = course_client(tmp_path, backend, "delete")
     h = headers(token_for(c, "admin@lms.test"))
@@ -1907,7 +1829,7 @@ def test_delete_course_admin(tmp_path, backend):
     assert all(course["id"] != "c1" for course in listed)
 
 
-@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+@pytest.mark.parametrize("backend", ["postgresql"])
 def test_delete_course_forbidden(tmp_path, backend):
     c = course_client(tmp_path, backend, "delete_forbidden")
     h = headers(token_for(c, "an.gv@lms.test"))
@@ -1920,7 +1842,7 @@ def test_delete_course_forbidden(tmp_path, backend):
 # ============================================================
 
 
-@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+@pytest.mark.parametrize("backend", ["postgresql"])
 def test_list_enrollments_instructor(tmp_path, backend):
     c = course_client(tmp_path, backend, "enroll_list")
     h = headers(token_for(c, "an.gv@lms.test"))
@@ -1932,7 +1854,7 @@ def test_list_enrollments_instructor(tmp_path, backend):
     ]
 
 
-@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+@pytest.mark.parametrize("backend", ["postgresql"])
 def test_list_enrollments_admin(tmp_path, backend):
     c = course_client(tmp_path, backend, "enroll_list_admin")
     h = headers(token_for(c, "admin@lms.test"))
@@ -1941,7 +1863,7 @@ def test_list_enrollments_admin(tmp_path, backend):
     assert len(response.get_json()) == 2
 
 
-@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+@pytest.mark.parametrize("backend", ["postgresql"])
 def test_list_enrollments_wrong_instructor(tmp_path, backend):
     c = course_client(tmp_path, backend, "enroll_list_wrong")
     h = headers(token_for(c, "binh.gv@lms.test"))
@@ -1949,7 +1871,7 @@ def test_list_enrollments_wrong_instructor(tmp_path, backend):
     assert_error(response, 403, "FORBIDDEN")
 
 
-@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+@pytest.mark.parametrize("backend", ["postgresql"])
 def test_list_enrollments_student_forbidden(tmp_path, backend):
     c = course_client(tmp_path, backend, "enroll_list_student")
     h = headers(token_for(c, "chi.sv@lms.test"))
@@ -1957,7 +1879,7 @@ def test_list_enrollments_student_forbidden(tmp_path, backend):
     assert_error(response, 403, "FORBIDDEN")
 
 
-@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+@pytest.mark.parametrize("backend", ["postgresql"])
 def test_add_enrollment(tmp_path, backend):
     c = course_client(tmp_path, backend, "enroll_add")
     h = headers(token_for(c, "an.gv@lms.test"))
@@ -1969,7 +1891,7 @@ def test_add_enrollment(tmp_path, backend):
     assert {"studentId": "u6", "score": 0.0} in listed
 
 
-@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+@pytest.mark.parametrize("backend", ["postgresql"])
 def test_add_enrollment_duplicate(tmp_path, backend):
     c = course_client(tmp_path, backend, "enroll_dup")
     h = headers(token_for(c, "an.gv@lms.test"))
@@ -1977,7 +1899,7 @@ def test_add_enrollment_duplicate(tmp_path, backend):
     assert_error(response, 400, "VALIDATION_ERROR")
 
 
-@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+@pytest.mark.parametrize("backend", ["postgresql"])
 def test_add_enrollment_non_student(tmp_path, backend):
     c = course_client(tmp_path, backend, "enroll_nonstudent")
     h = headers(token_for(c, "an.gv@lms.test"))
@@ -1985,7 +1907,7 @@ def test_add_enrollment_non_student(tmp_path, backend):
     assert_error(response, 400, "VALIDATION_ERROR")
 
 
-@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+@pytest.mark.parametrize("backend", ["postgresql"])
 def test_remove_enrollment(tmp_path, backend):
     c = course_client(tmp_path, backend, "enroll_remove")
     h = headers(token_for(c, "an.gv@lms.test"))
@@ -1995,7 +1917,7 @@ def test_remove_enrollment(tmp_path, backend):
     assert all(item["studentId"] != "u4" for item in listed)
 
 
-@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+@pytest.mark.parametrize("backend", ["postgresql"])
 def test_remove_enrollment_missing(tmp_path, backend):
     c = course_client(tmp_path, backend, "enroll_remove_missing")
     h = headers(token_for(c, "an.gv@lms.test"))
@@ -2003,7 +1925,7 @@ def test_remove_enrollment_missing(tmp_path, backend):
     assert_error(response, 404, "NOT_FOUND")
 
 
-@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+@pytest.mark.parametrize("backend", ["postgresql"])
 def test_add_enrollment_wrong_instructor(tmp_path, backend):
     c = course_client(tmp_path, backend, "enroll_add_wrong")
     h = headers(token_for(c, "binh.gv@lms.test"))

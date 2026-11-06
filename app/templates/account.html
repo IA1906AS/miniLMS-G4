@@ -33,6 +33,45 @@
         ></div>
     </section>
 
+    <section class="card">
+        <h2>Hồ sơ cá nhân</h2>
+        <img id="profile-avatar" class="profile-avatar" alt="Ảnh đại diện của bạn" hidden>
+        <p id="avatar-empty" class="sub">Bạn chưa có ảnh đại diện.</p>
+        <form id="profile-form">
+            <label for="profile-name">Họ và tên</label>
+            <input id="profile-name" name="fullName" maxlength="120" autocomplete="name">
+            <label for="profile-bio">Giới thiệu</label>
+            <textarea id="profile-bio" name="bio" maxlength="2000" rows="4"></textarea>
+            <label for="profile-contact">Thông tin liên hệ (chỉ bạn xem được)</label>
+            <textarea id="profile-contact" name="contact" maxlength="500" rows="2"></textarea>
+            <button type="submit">Lưu hồ sơ</button>
+        </form>
+        <div id="profile-msg" class="msg" role="status" aria-live="polite"></div>
+        <form id="avatar-form">
+            <label for="avatar-file">Ảnh đại diện mới</label>
+            <input type="file" id="avatar-file" accept="image/png,image/jpeg,image/webp" required>
+            <p class="sub">PNG, JPEG hoặc WebP; tối đa 2 MB. Ảnh được thu nhỏ tối đa 512 × 512.</p>
+            <button type="submit">Tải ảnh lên</button>
+            <button type="button" id="avatar-delete" hidden>Xóa ảnh đại diện</button>
+        </form>
+        <div id="avatar-msg" class="msg" role="status" aria-live="polite"></div>
+    </section>
+
+    <section class="card">
+        <h2>Thành viên cùng khóa học</h2>
+        <label for="member-course">Khóa học của bạn</label>
+        <select id="member-course"></select>
+        <p class="sub">Chọn thành viên để xem tên, giới thiệu và ảnh đại diện.</p>
+        <ul id="course-members" class="member-list"></ul>
+        <div id="members-msg" class="msg" role="status" aria-live="polite"></div>
+        <section id="member-detail" aria-label="Hồ sơ thành viên" hidden>
+            <img id="member-avatar" class="profile-avatar" alt="Ảnh đại diện thành viên" hidden>
+            <h3 id="member-name"></h3>
+            <p id="member-role" class="sub"></p>
+            <p id="member-bio" class="profile-bio"></p>
+        </section>
+    </section>
+
     <!-- Grades -->
     <section class="card">
         <h2>Điểm các môn</h2>
@@ -84,4 +123,8 @@
 
     
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/profiles.js') }}"></script>
 {% endblock %}

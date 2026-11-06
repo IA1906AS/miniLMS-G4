@@ -1,14 +1,13 @@
 """Password reset endpoints with local email simulation.
 
 Security features:
-- Shared SQLite rate limiting.
+- Shared PostgreSQL rate limiting.
 - Account enumeration protection.
 - Cryptographically secure reset tokens.
 - SHA-256 reset token storage.
 - One-time reset token usage.
-- Atomic password reset for SQLite.
+- Atomic password reset for PostgreSQL.
 - JWT invalidation after password reset.
-- Thread-safe Memory backend.
 - Local email simulation for development.
 """
 
@@ -16,7 +15,6 @@ from __future__ import annotations
 
 import hashlib
 import secrets
-import time
 
 from flask import (
     Blueprint,
@@ -153,11 +151,8 @@ def forgot_password() -> tuple[Response, int] | Response:
         return _rate_limited(max(ip_retry_after, email_retry_after))
 
     # STEP 4: LOOK UP ACCOUNT
-    if isinstance(store, dict):
-        user_id = store["users_by_email"].get(email)
-    else:
-        user = store.find_user_by_email(email)
-        user_id = user.id if user is not None else None
+    user = store.find_user_by_email(email)
+    user_id = user.id if user is not None else None
 
     # STEP 5: GENERATE TOKEN FOR BOTH CASES
     # Reduces timing differences between known and unknown emails.
@@ -168,18 +163,11 @@ def forgot_password() -> tuple[Response, int] | Response:
 
     # STEP 6: STORE TOKEN ONLY FOR EXISTING ACCOUNTS
     if user_id is not None:
-        if isinstance(store, dict):
-            with current_app.extensions["lms_reset_lock"]:
-                current_app.extensions["lms_reset_tokens"][token_hash] = (
-                    user_id,
-                    time.time() + ttl,
-                )
-        else:
-            store.add_reset_token(
-                token_hash,
-                user_id,
-                ttl,
-            )
+        store.add_reset_token(
+            token_hash,
+            user_id,
+            ttl,
+        )
 
     # STEP 7: LOCAL EMAIL SIMULATION
     # Enabled only for local development.
@@ -236,34 +224,13 @@ def reset_password() -> Response | tuple[Response, int]:
     )
 
     # STEP 4: ATOMIC PASSWORD RESET
-    if isinstance(store, dict):
-        reset_tokens = current_app.extensions["lms_reset_tokens"]
+    user_id = store.reset_password_atomic(
+        token_hash,
+        password_hash,
+    )
 
-        with current_app.extensions["lms_reset_lock"]:
-            record = reset_tokens.get(token_hash)
-
-            if record is None or record[1] <= time.time():
-                raise ValidationError("token không hợp lệ hoặc đã hết hạn")
-
-            user_id = record[0]
-            user = store["users"].get(user_id)
-
-            if user is None:
-                raise ValidationError("token không hợp lệ hoặc đã hết hạn")
-
-            user["password_hash"] = password_hash
-            user["token_version"] = user.get("token_version", 0) + 1
-
-            del reset_tokens[token_hash]
-
-    else:
-        user_id = store.reset_password_atomic(
-            token_hash,
-            password_hash,
-        )
-
-        if user_id is None:
-            raise ValidationError("token không hợp lệ hoặc đã hết hạn")
+    if user_id is None:
+        raise ValidationError("token không hợp lệ hoặc đã hết hạn")
 
     # STEP 5: AUDIT LOG
     write_audit(

@@ -6,7 +6,7 @@ Security features:
 - Unique JWT identifier (jti).
 - JWT token versioning.
 - Soft, time-limited account lockout after repeated failed logins.
-- Shared SQLite IP-based rate limiting.
+- Shared PostgreSQL IP-based rate limiting.
 """
 
 from __future__ import annotations
@@ -192,36 +192,22 @@ def account_locked_response(retry_after):
 
 
 def _get_attempt(store, email):
-    if isinstance(store, dict):
-        return store["failed_logins"].setdefault(
-            email,
-            {"count": 0, "locked_until": 0},
-        )
 
     return store.get_attempt(email)
 
 
 def _save_attempt(store, email, failures, locked_until):
-    if isinstance(store, dict):
-        store["failed_logins"][email] = {
-            "count": failures,
-            "locked_until": locked_until,
-        }
-    else:
-        store.save_attempt(
-            email,
-            LoginAttempt(
-                failures=failures,
-                locked_until=locked_until,
-            ),
-        )
+    store.save_attempt(
+        email,
+        LoginAttempt(
+            failures=failures,
+            locked_until=locked_until,
+        ),
+    )
 
 
 def _reset_attempt(store, email):
-    if isinstance(store, dict):
-        store["failed_logins"].pop(email, None)
-    else:
-        store.save_attempt(email, LoginAttempt())
+    store.save_attempt(email, LoginAttempt())
 
 
 def _attempt_failures(attempt):
@@ -301,14 +287,8 @@ def login():
         locked_until = 0
 
     # STEP 5: Load user (timing-safe fallback for unknown emails)
-    if isinstance(store, dict):
-        user_id = store["users_by_email"].get(email)
-        user = store["users"].get(user_id)
-
-        fallback_hash = next(iter(store["users"].values()))["password_hash"]
-    else:
-        user = store.find_user_by_email(email)
-        fallback_hash = store.get_fallback_password_hash()
+    user = store.find_user_by_email(email)
+    fallback_hash = store.get_fallback_password_hash()
 
     # STEP 6: Verify password
     if user is None:

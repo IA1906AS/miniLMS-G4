@@ -80,14 +80,18 @@ def validate_reset_confirm(data):
     return token, password
 
 
-def validate_course_body(data):
-    if not isinstance(data, dict) or set(data) != {"title", "instructorId"}:
+def validate_course_body(data, *, default_instructor=None):
+    if (
+        not isinstance(data, dict)
+        or "title" not in data
+        or set(data) - {"title", "instructorId"}
+    ):
         raise ValidationError()
 
     title = data["title"]
-    instructor_id = data["instructorId"]
+    instructor_id = data.get("instructorId", default_instructor)
 
-    if not isinstance(title, str) or not title.strip():
+    if not isinstance(title, str) or not title.strip() or len(title) > 200:
         raise ValidationError()
 
     if not isinstance(instructor_id, str) or not instructor_id.strip():
@@ -106,7 +110,9 @@ def validate_course_update(data):
     title = data.get("title")
     instructor_id = data.get("instructorId")
 
-    if "title" in data and (not isinstance(title, str) or not title.strip()):
+    if "title" in data and (
+        not isinstance(title, str) or not title.strip() or len(title) > 200
+    ):
         raise ValidationError()
 
     if "instructorId" in data and (

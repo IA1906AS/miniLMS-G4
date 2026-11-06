@@ -3,7 +3,7 @@
 Protect private routes using JWT authentication.
 
 Supports:
-- Memory and SQLite storage backends.
+- PostgreSQL persistence.
 - Public pages and authentication endpoints.
 - JWT signature and expiration verification.
 - JWT token versioning.
@@ -29,13 +29,6 @@ def is_token_revoked(jti: str) -> bool:
 
     store = current_app.extensions["lms_store"]
 
-    if isinstance(store, dict):
-        revoked_tokens = current_app.extensions.get(
-            "lms_revoked_tokens",
-            {},
-        )
-        return jti in revoked_tokens
-
     return store.is_token_revoked(jti)
 
 
@@ -59,6 +52,8 @@ def register_gate(app):
             "/register",
             "/resetpassword",
             "/account",
+            "/catalog",
+            "/study",
         }
 
         public_apis = {
@@ -112,10 +107,7 @@ def register_gate(app):
 
         store = current_app.extensions["lms_store"]
 
-        if isinstance(store, dict):
-            user = store["users"].get(payload["sub"])
-        else:
-            user = store.get_user(payload["sub"])
+        user = store.get_user(payload["sub"])
 
         if user is None:
             raise Unauthenticated()

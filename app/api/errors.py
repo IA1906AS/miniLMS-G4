@@ -38,6 +38,11 @@ class NotFound(APIError):
     error_code = "NOT_FOUND"
 
 
+class AlreadyEnrolled(APIError):
+    status_code = 409
+    error_code = "ALREADY_ENROLLED"
+
+
 class AccountLocked(APIError):
     status_code = 429
     error_code = "ACCOUNT_LOCKED"
@@ -99,6 +104,7 @@ def register_error_handlers(app):
             403: "FORBIDDEN",
             404: "NOT_FOUND",
             405: "METHOD_NOT_ALLOWED",
+            413: "FILE_TOO_LARGE",
             429: "RATE_LIMITED",
         }
 

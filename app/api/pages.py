@@ -34,6 +34,16 @@ def account():
     return render_template("account.html")
 
 
+@bp.get("/catalog")
+def catalog():
+    return render_template("courses.html")
+
+
+@bp.get("/study")
+def study():
+    return render_template("study.html")
+
+
 @bp.get("/resetpassword")
 def reset_password_page():
     """Trang đặt lại mật khẩu."""

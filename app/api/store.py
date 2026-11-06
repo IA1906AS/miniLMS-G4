@@ -1,9 +1,5 @@
-import json
-import threading
 from dataclasses import dataclass
 from pathlib import Path
-
-import bcrypt
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 SEED_PATH = BASE_DIR / "seed.json"
@@ -16,6 +12,10 @@ class User:
     role: str
     password_hash: str
     token_version: int = 0
+    full_name: str = ""
+    bio: str = ""
+    contact: str = ""
+    avatar_filename: str = ""
 
 
 @dataclass
@@ -43,40 +43,3 @@ class ResetToken:
     token: str
     user_id: str
     expires_at: float
-
-
-def load_seed(bcrypt_rounds: int = 12):
-    with open(SEED_PATH, encoding="utf-8") as file:
-        data = json.load(file)
-
-    users = {}
-    users_by_email = {}
-
-    for record in data["users"]:
-        user = {key: value for key, value in record.items() if key != "password"}
-
-        password_hash = bcrypt.hashpw(
-            record["password"].encode("utf-8"),
-            bcrypt.gensalt(rounds=bcrypt_rounds),
-        )
-
-        user["password_hash"] = password_hash.decode("utf-8")
-        user["token_version"] = 0
-
-        users[user["id"]] = user
-        users_by_email[user["email"].lower()] = user["id"]
-
-    courses = {course["id"]: dict(course) for course in data["courses"]}
-
-    enrollments = [dict(enrollment) for enrollment in data["enrollments"]]
-
-    return {
-        "users": users,
-        "users_by_email": users_by_email,
-        "courses": courses,
-        "enrollments": enrollments,
-        # Account lockout state: email -> {"count", "locked_until"}.
-        "failed_logins": {},
-        "registration_lock": threading.Lock(),
-        "course_lock": threading.Lock(),
-    }
