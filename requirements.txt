@@ -1,7 +1,7 @@
 Flask>=3.1,<4.0
 bcrypt>=4.0,<6.0
 PyJWT>=2.8,<3.0
-Pillow>=11,<13
+Pillow>=13,<14
 psycopg[binary]>=3.2,<4
 python-dotenv>=1,<2
 pytest>=8.0,<10.0
