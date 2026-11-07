@@ -34,6 +34,16 @@ def account():
     return render_template("account.html")
 
 
+@bp.get("/dashboard")
+def dashboard():
+    return render_template("dashboard.html")
+
+
+@bp.get("/grades")
+def grades():
+    return render_template("grades.html")
+
+
 @bp.get("/catalog")
 def catalog():
     return render_template("courses.html")
@@ -42,6 +52,11 @@ def catalog():
 @bp.get("/study")
 def study():
     return render_template("study.html")
+
+
+@bp.get("/forum")
+def forum():
+    return render_template("forum.html")
 
 
 @bp.get("/resetpassword")
@@ -59,3 +74,8 @@ def change_password_page():
 @bp.get("/admin/users")
 def admin_users_page():
     return render_template("admin_users.html")
+
+
+@bp.get("/admin/audit")
+def admin_audit_page():
+    return render_template("admin_audit.html")

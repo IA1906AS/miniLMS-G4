@@ -2,6 +2,7 @@
 {% block title %}Khóa học{% endblock %}
 {% block content %}
 <div class="home-layout" id="catalog-page">
+    {% include "_catalog_placeholder.html" %}
     <section class="card">
         <h1>Khóa học</h1>
         <form id="course-search">
@@ -43,7 +44,33 @@
         <p id="course-detail-owner"></p>
         <p id="course-detail-state" class="sub"></p>
         <p><a id="course-study-link" class="btn-link" hidden>Bài tập, trắc nghiệm và kết quả</a></p>
+        <p><a id="course-forum-link" class="btn-link" hidden>Diễn đàn khóa học</a></p>
+        <section id="announcements-panel" hidden>
+            <h3>Thông báo lớp học</h3>
+            <form id="announcement-create" hidden>
+                <label for="announcement-title">Tiêu đề</label>
+                <input id="announcement-title" maxlength="200" required>
+                <label for="announcement-body">Nội dung</label>
+                <textarea id="announcement-body" rows="5" maxlength="10000" required></textarea>
+                <label class="checkbox-label"><input id="announcement-email" type="checkbox" checked> Gửi email cho sinh viên trong lớp</label>
+                <button type="submit">Đăng thông báo</button>
+            </form>
+            <div id="announcement-msg" class="msg" role="status" aria-live="polite"></div>
+            <ul id="announcement-list" class="member-list"></ul>
+            <button id="announcement-prev" type="button">Mới hơn</button>
+            <span id="announcement-page" role="status"></span>
+            <button id="announcement-next" type="button">Cũ hơn</button>
+        </section>
         <div id="course-manager" hidden>
+            <div id="course-admin" hidden>
+                <h3>Quản trị khóa học</h3>
+                <form id="course-transfer">
+                    <label for="course-transfer-owner">Giảng viên phụ trách</label>
+                    <select id="course-transfer-owner" required></select>
+                    <button type="submit">Chuyển giảng viên</button>
+                </form>
+                <button id="course-delete" type="button">Xóa khóa học</button>
+            </div>
             <h3>Cập nhật khóa học</h3>
             <form id="course-edit">
                 <label for="course-edit-title">Tên khóa học</label>

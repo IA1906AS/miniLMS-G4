@@ -4,6 +4,8 @@ let catalogUser;
 let selectedCourse = null;
 let detailRequest = 0;
 let catalogRequest = 0;
+let announcementPage = 1;
+let announcementRequest = 0;
 const instructorNames = new Map();
 
 function coursePath(id) {
@@ -47,13 +49,21 @@ async function selectCourse(id) {
     const requestId = ++detailRequest;
     selectedCourse = null;
     $('course-study-link').hidden = true;
+    $('course-forum-link').hidden = true;
     $('course-detail').hidden = true;
     $('course-detail-msg').className = 'msg';
     const course = await api(coursePath(id), { auth: true });
     if (requestId !== detailRequest) return;
     selectedCourse = course;
+    $('course-placeholder').hidden = true;
+    announcementPage = 1;
+    $('announcements-panel').hidden = !course.canAccessMaterials;
+    $('announcement-create').hidden = !(catalogUser.role === 'INSTRUCTOR' && course.canManage);
+    $('announcement-msg').className = 'msg';
     $('course-study-link').hidden = !course.canAccessMaterials;
     $('course-study-link').href = '/study?course=' + encodeURIComponent(id);
+    $('course-forum-link').hidden = !course.canAccessMaterials;
+    $('course-forum-link').href = '/forum?course=' + encodeURIComponent(id);
     $('course-detail-title').textContent = course.title;
     $('course-detail-code').textContent = 'Mã khóa học: ' + course.courseCode;
     $('course-detail-owner').textContent = 'Giảng viên: ' +
@@ -62,6 +72,8 @@ async function selectCourse(id) {
         course.canManage ? 'Bạn có quyền quản lý khóa học này.' : 'Bạn chưa tham gia khóa học này.';
     if (catalogUser.role === 'STUDENT') $('course-code').value = course.courseCode;
     $('course-manager').hidden = !course.canManage;
+    $('course-admin').hidden = catalogUser.role !== 'ADMIN';
+    $('course-transfer-owner').value = course.instructorId;
     $('course-edit-title').value = course.title;
     $('material-upload').hidden = !course.canManage;
     $('course-enrollments').replaceChildren();
@@ -70,6 +82,7 @@ async function selectCourse(id) {
         'Bạn cần ghi danh khóa học để xem và tải tài liệu.';
     $('course-detail').hidden = false;
     await Promise.all([
+        loadAnnouncements(id),
         (async () => {
             if (!course.canManage) return;
             const rows = await api(coursePath(id) + '/enrollments', { auth: true });
@@ -119,6 +132,63 @@ async function selectCourse(id) {
     ]);
 }
 
+function deliveryMessage(email) {
+    const messages = {
+        disabled: 'Đã lưu trên hệ thống. SMTP chưa bật nên chưa gửi email.',
+        local: `Đã lưu ${email.sent} thư mô phỏng trong instance/mailbox/.`,
+        local_partial: `Đã lưu ${email.sent} thư trong instance/mailbox/; ${email.failed} thư bị lỗi.`,
+        not_requested: 'Chỉ đăng trên hệ thống.',
+        no_recipients: 'Chưa có sinh viên hoạt động trong lớp để gửi email.',
+        pending: 'Chưa hoàn tất gửi email.',
+        sent: `Đã gửi ${email.sent} email.`,
+        partial: `Đã gửi ${email.sent} email; ${email.failed} email gửi lỗi.`,
+        failed: `Đã lưu thông báo; gửi email thất bại (${email.failed}).`
+    };
+    return messages[email.status] || '';
+}
+
+async function loadAnnouncements(id) {
+    if (!selectedCourse?.canAccessMaterials) return;
+    const requestId = ++announcementRequest;
+    try {
+        const data = await api(coursePath(id) + '/announcements?page=' + announcementPage, {auth: true});
+        if (selectedCourse?.id !== id || requestId !== announcementRequest) return;
+        const list = $('announcement-list');
+        list.replaceChildren();
+        if (!data.items.length) {
+            const empty = document.createElement('li');
+            empty.textContent = 'Chưa có thông báo.';
+            list.appendChild(empty);
+        }
+        for (const item of data.items) {
+            const li = document.createElement('li');
+            const title = document.createElement('h4');
+            title.textContent = item.title;
+            const meta = document.createElement('p');
+            meta.className = 'sub';
+            meta.textContent = item.authorName + ' · ' + new Date(item.createdAt).toLocaleString('vi-VN');
+            const body = document.createElement('p');
+            body.className = 'profile-bio';
+            body.textContent = item.body;
+            li.append(title, meta, body);
+            if (item.email) {
+                const status = document.createElement('p');
+                status.className = 'sub';
+                status.textContent = deliveryMessage(item.email);
+                li.appendChild(status);
+            }
+            list.appendChild(li);
+        }
+        $('announcement-page').textContent = `Trang ${data.page} · ${data.total} thông báo`;
+        $('announcement-prev').disabled = data.page <= 1;
+        $('announcement-next').disabled = data.page * data.pageSize >= data.total;
+    } catch (error) {
+        if (selectedCourse?.id === id && requestId === announcementRequest) {
+            flash($('announcement-msg'), translate(error.message), false);
+        }
+    }
+}
+
 async function downloadMaterial(material) {
     const response = await fetch(material.downloadUrl, {
         headers: { Authorization: 'Bearer ' + token() }, cache: 'no-store'
@@ -156,7 +226,7 @@ async function initCatalog() {
         for (const instructor of instructors) {
             const name = instructor.fullName || instructor.id;
             instructorNames.set(instructor.id, name);
-            for (const id of ['course-instructor', 'course-new-owner']) {
+            for (const id of ['course-instructor', 'course-new-owner', 'course-transfer-owner']) {
                 const option = document.createElement('option');
                 option.value = instructor.id;
                 option.textContent = name + ' (' + instructor.id + ')';
@@ -167,6 +237,47 @@ async function initCatalog() {
         $('course-owner-field').hidden = catalogUser.role !== 'ADMIN';
         $('course-join-panel').hidden = catalogUser.role !== 'STUDENT';
         courseForm('course-search', 'catalog-msg', loadCatalog);
+        courseForm('course-transfer', 'course-detail-msg', async () => {
+            if (!selectedCourse || catalogUser.role !== 'ADMIN') return;
+            const id = selectedCourse.id;
+            if (!window.confirm('Chuyển giảng viên phụ trách khóa học này?')) return;
+            await api(coursePath(id), {method:'PUT',auth:true,body:{instructorId:$('course-transfer-owner').value}});
+            await loadCatalog();
+            if (selectedCourse?.id === id) await selectCourse(id);
+        });
+        $('course-delete').addEventListener('click', async () => {
+            if (!selectedCourse || catalogUser.role !== 'ADMIN' || $('course-delete').disabled) return;
+            const course = selectedCourse;
+            if (!window.confirm('Xóa khóa học "' + course.title + '" cùng toàn bộ ghi danh, tài liệu, bài nộp, bài kiểm tra và thảo luận? Thao tác không thể hoàn tác.')) return;
+            $('course-delete').disabled = true;
+            try {
+                await api(coursePath(course.id), {method:'DELETE',auth:true});
+                if (selectedCourse?.id === course.id) { selectedCourse = null; $('course-detail').hidden = true; $('course-placeholder').hidden = false; }
+                await loadCatalog();
+                flash($('catalog-msg'), 'Đã xóa khóa học.');
+            } catch (error) { flash($('course-detail-msg'), translate(error.message), false); }
+            finally { $('course-delete').disabled = false; }
+        });
+        courseForm('announcement-create', 'announcement-msg', async () => {
+            if (!selectedCourse) return;
+            const id = selectedCourse.id;
+            const result = await api(coursePath(id) + '/announcements', {
+                method: 'POST', auth: true,
+                body: {title: $('announcement-title').value.trim(), body: $('announcement-body').value.trim(), sendEmail: $('announcement-email').checked}
+            });
+            if (selectedCourse?.id !== id) return;
+            $('announcement-create').reset();
+            announcementPage = 1;
+            await loadAnnouncements(id);
+            flash($('announcement-msg'), 'Đã đăng thông báo. ' + deliveryMessage(result.email), !['failed','partial','local_partial','disabled'].includes(result.email.status));
+        });
+        for (const [id, delta] of [['announcement-prev', -1], ['announcement-next', 1]]) {
+            $(id).addEventListener('click', () => {
+                if (!selectedCourse) return;
+                announcementPage += delta;
+                loadAnnouncements(selectedCourse.id);
+            });
+        }
         courseForm('course-create', 'create-course-msg', async () => {
             const body = { title: $('course-new-title').value.trim() };
             if (catalogUser.role === 'ADMIN') body.instructorId = $('course-new-owner').value;
@@ -219,6 +330,8 @@ async function initCatalog() {
             flash($('course-detail-msg'), 'Đã tải tài liệu lên.');
         });
         await loadCatalog();
+        const linkedCourse = new URLSearchParams(window.location.search).get('course');
+        if (linkedCourse) await selectCourse(linkedCourse);
     } catch (error) {
         if (error.status === 401) { window.location.replace('/login'); return; }
         flash($('catalog-msg'), translate(error.message), false);

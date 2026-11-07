@@ -27,6 +27,8 @@ def write_audit(
     if new_score is not None:
         record["newScore"] = new_score
 
+    current_app.extensions["lms_store"].record_audit(record)
+
     log_path = Path(current_app.config["AUDIT_LOG_PATH"])
 
     log_path.parent.mkdir(

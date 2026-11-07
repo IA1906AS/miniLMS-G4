@@ -277,7 +277,7 @@ async function loginForm(event) {
             'Đăng nhập thành công, đang chuyển trang.'
         );
 
-        window.location.assign('/account');
+        window.location.assign('/dashboard');
 
     } catch (error) {
         console.error('Login failed:', error.message);
@@ -369,7 +369,8 @@ async function forgotForm(event) {
         // Không hiển thị token reset trong thông báo.
         flash(
             messageBox,
-            'Nếu email tồn tại, hướng dẫn đặt lại mật khẩu đã được gửi.'
+            $('forgot-form').dataset.successMessage ||
+                'Đã tiếp nhận yêu cầu. Nếu email đã đăng ký, vui lòng kiểm tra thư hướng dẫn đặt lại mật khẩu.'
         );
 
     } catch (error) {
@@ -477,14 +478,14 @@ async function loadAccount() {
         }
 
         if ($('me-role')) {
-            $('me-role').textContent = me.role ?? '–';
+            $('me-role').textContent = ({ADMIN:'Quản trị viên',INSTRUCTOR:'Giảng viên',STUDENT:'Sinh viên'})[me.role] ?? '–';
         }
+        if ($('members-section')) $('members-section').hidden = me.role === 'ADMIN';
 
         if ($('who')) {
             $('who').textContent = me.email ?? 'Người dùng';
         }
 
-        initGradeEditor(me.role);
         if ($('admin-users-link')) $('admin-users-link').hidden = me.role !== 'ADMIN';
         initProfileFeatures();
 
@@ -511,16 +512,24 @@ async function loadAccount() {
         return;
     }
 
-    try {
-        await loadGrades();
-    } catch (error) {
-        console.error('Load grades failed:', error.message);
+}
 
-        flash(
-            $('account-msg'),
-            'Đã tải tài khoản nhưng chưa thể tải điểm.',
-            false
-        );
+async function loadGradesPage() {
+    if (!token()) { window.location.replace('/login'); return; }
+    try {
+        const me = await api('/me', {auth:true});
+        const teacher = me.role === 'INSTRUCTOR';
+        $('grades-page-title').textContent = teacher ? 'Quản lý điểm' : 'Kết quả học tập';
+        $('grades-page-description').textContent = teacher
+            ? 'Xem và cập nhật điểm tổng kết cho sinh viên trong các lớp bạn phụ trách.'
+            : 'Theo dõi điểm tổng kết các môn. Điểm bài tập và trắc nghiệm nằm trong từng khóa học.';
+        $('grades-heading').textContent = teacher ? 'Điểm các lớp phụ trách' : 'Điểm các môn';
+        $('workspace-page-title').textContent = teacher ? 'Quản lý điểm' : 'Kết quả học tập';
+        await Promise.all([loadGrades(), initGradeEditor(me.role, me.id)]);
+        $('grades-content').hidden = false;
+    } catch (error) {
+        if (error.status === 401) { sessionStorage.removeItem(TOKEN_KEY); window.location.replace('/login'); return; }
+        flash($('grades-page-msg'), translate(error.message), false);
     }
 }
 
@@ -539,7 +548,7 @@ async function loadGrades() {
     let courses;
 
     try {
-        courses = await api('/courses', { auth: true });
+        courses = await api('/me/courses', { auth: true });
     } catch (error) {
         if (error.status === 403 || error.status === 404) {
             courses = [];
@@ -659,7 +668,7 @@ async function loadEnrollmentsIntoEditor(courseId) {
 }
 
 
-async function initGradeEditor(role) {
+async function initGradeEditor(role, userId) {
     const editor = $('grade-editor');
 
     if (!editor) return;
@@ -677,7 +686,7 @@ async function initGradeEditor(role) {
     const button = $('edit-grade-button');
 
     try {
-        const courses = await api('/courses', { auth: true });
+        const courses = await api('/me/courses', { auth: true });
 
         courseSelect.replaceChildren();
 
@@ -687,6 +696,7 @@ async function initGradeEditor(role) {
         courseSelect.appendChild(placeholder);
 
         for (const course of courses) {
+            if (course.instructorId !== userId) continue;
             const option = document.createElement('option');
             option.value = course.id;
             option.textContent = course.title + ' (' + course.id + ')';
@@ -926,9 +936,72 @@ async function changePasswordForm(event) {
     }
 }
 
+async function initHome() {
+    if (!token()) return;
+    window.location.replace('/dashboard');
+}
+
+function closeWorkspaceNav() {
+    const wasOpen = document.body.classList.contains('nav-open');
+    document.body.classList.remove('nav-open');
+    $('sidebar-toggle').setAttribute('aria-expanded', 'false');
+    $('sidebar-overlay').hidden = true;
+    if (wasOpen) $('sidebar-toggle').focus();
+}
+
+function showWorkspace(me) {
+    if (!$('workspace-sidebar')) return;
+    const labels = {ADMIN:'Quản trị viên',INSTRUCTOR:'Giảng viên',STUDENT:'Sinh viên'};
+    document.body.classList.add('workspace-auth');
+    document.body.dataset.role = me.role;
+    $('workspace-sidebar').hidden = false;
+    $('workspace-topbar').hidden = false;
+    $('workspace-role').textContent = labels[me.role];
+    $('workspace-user-role').textContent = labels[me.role];
+    $('workspace-user-name').textContent = me.fullName || me.email;
+    $('workspace-user-initial').textContent = (me.fullName || me.email).slice(0,1).toUpperCase();
+    $('workspace-page-title').textContent = document.title.split('·')[0].trim();
+    $('workspace-courses-label').textContent = me.role === 'ADMIN' ? 'Quản lý khóa học' : me.role === 'INSTRUCTOR' ? 'Lớp giảng dạy' : 'Khóa học của tôi';
+    $('workspace-grades-label').textContent = me.role === 'INSTRUCTOR' ? 'Quản lý điểm' : 'Kết quả học tập';
+    $('workspace-grades-link').href = '/grades';
+    $('workspace-grades-link').dataset.nav = '/grades';
+    document.querySelectorAll('[data-workspace-roles]').forEach(element => {
+        element.hidden = !element.dataset.workspaceRoles.split(' ').includes(me.role);
+    });
+    document.querySelectorAll('[data-nav]').forEach(element => {
+        const profilePage = element.dataset.nav === '/account' && window.location.pathname === '/account';
+        const exact = element.dataset.nav === window.location.pathname + window.location.hash || profilePage;
+        const coursePage = element.dataset.nav === '/catalog' && ['/study','/forum'].includes(window.location.pathname);
+        const active = exact || coursePage;
+        element.classList.toggle('active',active);
+        if (active) element.setAttribute('aria-current','page'); else element.removeAttribute('aria-current');
+    });
+}
+
+async function initWorkspace() {
+    if (!token()) return;
+    try { showWorkspace(await api('/me', {auth:true})); }
+    catch (error) {
+        if (error.status === 401) { sessionStorage.removeItem(TOKEN_KEY); updateNavigation(); }
+    }
+}
+
 function initApp() {
     updateNavigation();
     initPasswordToggle();
+    initWorkspace();
+    if ($('workspace-logout')) {
+        $('workspace-logout').addEventListener('click', logout);
+        $('sidebar-toggle').addEventListener('click', () => {
+            const open = document.body.classList.toggle('nav-open');
+            $('sidebar-toggle').setAttribute('aria-expanded', String(open));
+            $('sidebar-overlay').hidden = !open;
+        });
+        $('sidebar-overlay').addEventListener('click', closeWorkspaceNav);
+        document.addEventListener('keydown', event => { if (event.key === 'Escape') closeWorkspaceNav(); });
+        window.addEventListener('hashchange', () => { initWorkspace(); closeWorkspaceNav(); });
+    }
+    if ($('home-title')) initHome();
 
     const changeForm = $('change-password-form');
     if (changeForm) {
@@ -967,6 +1040,7 @@ function initApp() {
     if ($('me-id')) {
         loadAccount();
     }
+    if ($('grades-page-title')) loadGradesPage();
 }
 
 if (document.readyState === 'loading') {

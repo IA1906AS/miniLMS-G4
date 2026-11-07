@@ -12,46 +12,91 @@ async function loadAdminUsers() {
     const list = $('admin-user-list');
     list.replaceChildren();
     if (!data.items.length) {
-        const empty = document.createElement('li');
-        empty.textContent = 'Không tìm thấy người dùng.';
+        const empty = document.createElement('tr');
+        const cell = document.createElement('td');
+        cell.colSpan = 6;
+        cell.className = 'admin-users-empty';
+        cell.textContent = 'Không tìm thấy người dùng phù hợp.';
+        empty.appendChild(cell);
         list.appendChild(empty);
     }
-    for (const user of data.items) {
-        const li = document.createElement('li');
-        const title = document.createElement('p');
-        title.textContent = `${user.fullName || user.email} · ${user.email} · ${user.id} · ${user.isLocked ? 'Đã khóa' : 'Hoạt động'}`;
+    for (const [index, user] of data.items.entries()) {
+        const row = document.createElement('tr');
+        const numberCell = document.createElement('td');
+        numberCell.textContent = (data.page - 1) * data.pageSize + index + 1;
+        const nameCell = document.createElement('td');
+        const name = document.createElement('strong');
+        name.textContent = user.fullName || 'Chưa cập nhật họ tên';
+        nameCell.appendChild(name);
+        if (user.id === adminActor.id) {
+            const own = document.createElement('span');
+            own.className = 'pill';
+            own.textContent = 'Bạn';
+            nameCell.appendChild(own);
+        }
+        const details = document.createElement('details');
+        details.className = 'admin-user-id';
+        const summary = document.createElement('summary');
+        summary.textContent = 'Mã tài khoản';
+        const code = document.createElement('code');
+        code.textContent = user.id;
+        details.append(summary, code);
+        nameCell.appendChild(details);
+        const emailCell = document.createElement('td');
+        emailCell.className = 'admin-user-email';
+        emailCell.textContent = user.email;
+        const roleCell = document.createElement('td');
         const role = document.createElement('select');
         role.setAttribute('aria-label', 'Vai trò của ' + user.email);
         for (const name of ['STUDENT', 'INSTRUCTOR', 'ADMIN']) {
             const option = document.createElement('option');
             option.value = name;
-            option.textContent = name;
+            option.textContent = ({STUDENT:'Sinh viên',INSTRUCTOR:'Giảng viên',ADMIN:'Quản trị viên'})[name];
             role.appendChild(option);
         }
         role.value = user.role;
+        roleCell.appendChild(role);
+        const statusCell = document.createElement('td');
+        const status = document.createElement('span');
+        status.className = 'user-status ' + (user.isLocked ? 'is-locked' : 'is-active');
+        status.textContent = user.isLocked ? 'Đã khóa' : 'Hoạt động';
+        statusCell.appendChild(status);
+        const actionsCell = document.createElement('td');
+        const actions = document.createElement('div');
+        actions.className = 'admin-row-actions';
         const save = document.createElement('button');
         save.type = 'button';
         save.textContent = 'Lưu vai trò';
         const lock = document.createElement('button');
         lock.type = 'button';
         lock.textContent = user.isLocked ? 'Mở khóa' : 'Khóa tài khoản';
-        role.disabled = save.disabled = lock.disabled = user.id === adminActor.id;
+        lock.className = user.isLocked ? 'user-unlock' : 'user-lock';
+        const isSelf = user.id === adminActor.id;
+        role.disabled = lock.disabled = isSelf;
+        save.disabled = true;
+        role.addEventListener('change', () => { save.disabled = isSelf || role.value === user.role; });
+        if (isSelf) {
+            role.title = lock.title = save.title = 'Không thể tự khóa hoặc đổi vai trò tài khoản quản trị đang dùng.';
+        }
         async function update(changes, prompt) {
             if (!window.confirm(prompt)) return;
-            save.disabled = lock.disabled = true;
+            role.disabled = save.disabled = lock.disabled = true;
             try {
                 await api('/admin/api/users/' + encodeURIComponent(user.id), {method: 'PUT', auth: true, body: changes});
                 await loadAdminUsers();
                 flash($('admin-msg'), 'Đã cập nhật người dùng.');
             } catch (error) {
                 showAdminError(error);
-                save.disabled = lock.disabled = false;
+                role.disabled = lock.disabled = isSelf;
+                save.disabled = isSelf || role.value === user.role;
             }
         }
         save.addEventListener('click', () => update({role: role.value}, 'Đổi vai trò của ' + user.email + '?'));
         lock.addEventListener('click', () => update({isLocked: !user.isLocked}, (user.isLocked ? 'Mở khóa ' : 'Khóa tài khoản ') + user.email + '?'));
-        li.append(title, role, save, lock);
-        list.appendChild(li);
+        actions.append(save, lock);
+        actionsCell.appendChild(actions);
+        row.append(numberCell, nameCell, emailCell, roleCell, statusCell, actionsCell);
+        list.appendChild(row);
     }
     $('users-page').textContent = `Trang ${data.page} · ${data.total} người dùng`;
     $('users-prev').disabled = data.page <= 1;

@@ -3,19 +3,36 @@
 {% block content %}
 <section class="card">
     <h1>Quản lý người dùng</h1>
+    <p><a href="{{ url_for('pages.admin_audit_page') }}">Nhật ký hoạt động</a></p>
     <div id="admin-msg" class="msg" role="status" aria-live="polite"></div>
     <div id="admin-panel" hidden>
-        <form id="user-search">
+        <form id="user-search" class="admin-users-search">
             <label for="user-query">Tìm theo mã, email hoặc họ tên</label>
-            <input id="user-query" type="search" maxlength="200">
-            <button type="submit">Tìm kiếm</button>
+            <div class="admin-search-row">
+                <input id="user-query" type="search" maxlength="200" placeholder="Nhập họ tên, email hoặc mã tài khoản…">
+                <button type="submit">Tìm kiếm</button>
+            </div>
         </form>
-        <p>Khóa tài khoản hoặc đổi vai trò sẽ thu hồi các phiên đăng nhập hiện tại.
+        <p class="admin-users-note">Khóa tài khoản hoặc đổi vai trò sẽ thu hồi các phiên đăng nhập hiện tại.
             Chuyển các khóa học cho giảng viên khác trước khi đổi vai trò giảng viên phụ trách.</p>
-        <ul id="admin-user-list" class="member-list"></ul>
-        <button id="users-prev" type="button">Trang trước</button>
-        <span id="users-page" role="status"></span>
-        <button id="users-next" type="button">Trang sau</button>
+        <div class="admin-table-scroll" role="region" aria-label="Danh sách người dùng" tabindex="0">
+            <table class="admin-users-table">
+                <thead><tr>
+                    <th scope="col">STT</th>
+                    <th scope="col">Họ tên / mã tài khoản</th>
+                    <th scope="col">Email</th>
+                    <th scope="col">Vai trò</th>
+                    <th scope="col">Trạng thái</th>
+                    <th scope="col">Thao tác</th>
+                </tr></thead>
+                <tbody id="admin-user-list"></tbody>
+            </table>
+        </div>
+        <div class="admin-users-pagination">
+            <button id="users-prev" type="button" class="ghost">Trang trước</button>
+            <span id="users-page" role="status"></span>
+            <button id="users-next" type="button" class="ghost">Trang sau</button>
+        </div>
     </div>
     <p><a href="{{ url_for('pages.account') }}">Quay lại tài khoản</a></p>
 </section>

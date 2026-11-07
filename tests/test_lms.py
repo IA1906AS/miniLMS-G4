@@ -456,9 +456,10 @@ def test_a19_audit_log(app, client):
 
     lines = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
 
-    assert len(lines) == 2
+    grade_lines = [item for item in lines if item["action"] == "UPDATE_GRADE"]
+    assert len(grade_lines) == 2
 
-    denied_log, success_log = lines
+    denied_log, success_log = grade_lines
 
     assert denied_log["actorId"] == "u3"
     assert denied_log["result"] == "DENIED"

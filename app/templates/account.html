@@ -35,7 +35,7 @@
         ></div>
     </section>
 
-    <section class="card">
+    <section class="card" id="profile-section">
         <h2>Hồ sơ cá nhân</h2>
         <img id="profile-avatar" class="profile-avatar" alt="Ảnh đại diện của bạn" hidden>
         <p id="avatar-empty" class="sub">Bạn chưa có ảnh đại diện.</p>
@@ -59,7 +59,7 @@
         <div id="avatar-msg" class="msg" role="status" aria-live="polite"></div>
     </section>
 
-    <section class="card">
+    <section class="card" id="members-section">
         <h2>Thành viên cùng khóa học</h2>
         <label for="member-course">Khóa học của bạn</label>
         <select id="member-course"></select>
@@ -74,56 +74,7 @@
         </section>
     </section>
 
-    <!-- Grades -->
-    <section class="card">
-        <h2>Điểm các môn</h2>
 
-        <table>
-            <thead>
-                <tr>
-                    <th>Môn</th>
-                    <th>Sinh viên</th>
-                    <th>Điểm</th>
-                </tr>
-            </thead>
-
-            <tbody id="grades"></tbody>
-        </table>
-    </section>
-
-    <!-- Grade editor (instructors only) -->
-    <section class="card" id="grade-editor" hidden>
-        <h2>Quản lý điểm</h2>
-
-        <label for="edit-course">Môn học</label>
-        <select id="edit-course"></select>
-
-        <label for="edit-student">Sinh viên</label>
-        <select id="edit-student"></select>
-
-        <label for="edit-score">Điểm (0–10)</label>
-        <input
-            type="number"
-            id="edit-score"
-            min="0"
-            max="10"
-            step="0.5"
-            placeholder="Nhập điểm mới"
-        >
-
-        <button type="button" id="edit-grade-button">
-            Cập nhật điểm
-        </button>
-
-        <div
-            id="edit-grade-msg"
-            class="msg"
-            role="status"
-            aria-live="polite"
-        ></div>
-    </section>
-
-    
 </div>
 {% endblock %}
 

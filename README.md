@@ -50,6 +50,12 @@ Thay khóa JWT và thông tin đăng nhập trước khi triển khai thực t�
 
 ## Đổi mật khẩu và email khôi phục
 
+Chế độ thử cục bộ: đặt `SMTP_ENABLED=0`, `LOCAL_EMAIL_ENABLED=1` trong `.env`
+và chạy `uv run flask --app app run --debug`. Thư reset nằm trong
+`instance/mailbox/reset-*.txt`: mở file và dùng liên kết để đặt mật khẩu mới.
+Thư thông báo lớp học được lưu riêng cho từng người nhận tại
+`instance/mailbox/announcement-*.txt`. Không cần Gmail hoặc email thật ở chế độ này.
+
 Trang tài khoản có liên kết tới `/changepassword`. Người dùng xác nhận mật khẩu
 hiện tại trước khi đặt mật khẩu mới. Đổi thành công sẽ vô hiệu hóa mọi JWT và
 token khôi phục cũ của tài khoản, yêu cầu đăng nhập lại.
@@ -111,6 +117,43 @@ Chỉ được tạo khi database chưa có người dùng. Mật khẩu chung: 
 | `chi.sv@lms.test`, `dung.sv@lms.test`, `em.sv@lms.test` | STUDENT |
 
 ## Các chức năng và giao diện
+
+- **Sáng/tối:** nút chuyển giao diện ở thanh trên, mặc định dùng màu tối navy cũ;
+  lựa chọn được lưu trên trình duyệt và áp dụng cho tất cả trang.
+- **Điểm số** (`/grades`): trang riêng cho kết quả SV và quản lý điểm GV;
+  không có form cập nhật hồ sơ. `/account` chỉ dành cho hồ sơ, ảnh và thông tin tài khoản.
+
+- **Dashboard theo vai trò** (`/dashboard`): sau đăng nhập, ADMIN xem số người dùng,
+  tài khoản khóa, khóa học và nhật ký gần đây; GV xem lớp phụ trách, số sinh viên,
+  bài cần chấm và hạn nộp; SV xem khóa đã ghi danh, bài chưa nộp còn hạn,
+  bài đã nộp và thông báo. Số liệu lấy từ PostgreSQL qua `GET /api/dashboard`,
+  có kiểm tra JWT và giới hạn dữ liệu theo vai trò. Sidebar, liên kết nhanh và
+  điều hướng trên điện thoại dùng chung cho các trang chức năng.
+
+- **Diễn đàn khóa học** (`/forum?course=<id>`): mở từ chi tiết khóa học.
+  SV đã ghi danh và GV phụ trách tạo chủ đề, bình luận, sửa/xóa nội dung của mình.
+  GV không được sửa/xóa bài của SV; ADMIN chỉ xem. Xóa chủ đề xóa cả bình luận.
+  Mỗi trang 20 mục, nội dung hiển thị dạng văn bản, giới hạn 30 bài mới/giờ/người.
+  Hủy ghi danh thu hồi quyền diễn đàn; xóa khóa học xóa thảo luận liên quan.
+- **Nhật ký hoạt động** (`/admin/audit`): ADMIN mở từ trang quản lý người dùng,
+  lọc theo tên sự kiện và mã người dùng, xem theo trang. Nhật ký ghi vào PostgreSQL
+  và tiếp tục ghi file theo `AUDIT_LOG_PATH`. Có đăng nhập thành công/thất bại,
+  sửa điểm, thao tác quản trị, thông báo và diễn đàn; không lưu mật khẩu/JWT/token reset.
+  Các file log cũ chưa tự nhập vào PostgreSQL.
+- **Quản trị khóa học:** trong chi tiết khóa học, ADMIN có thể chuyển GV và xóa khóa.
+  Giao diện yêu cầu xác nhận trước thao tác; xóa khóa xóa dữ liệu/tệp liên quan.
+- **Trang chủ:** xác thực JWT trước khi hiện lời chào và các liên kết theo vai trò;
+  người đã đăng nhập không còn thấy nút đăng nhập/tạo tài khoản ở nội dung chính.
+
+- **Thông báo khóa học:** trong `/catalog`, chọn khóa học để xem thông báo.
+  GV phụ trách có thể đăng tiêu đề/nội dung và chọn gửi email; SV chỉ xem được
+  khi còn ghi danh. ADMIN được xem, GV khác không được truy cập. Mỗi trang có
+  20 thông báo, mới nhất trước. Email gửi riêng tới SV đang hoạt động trong lớp,
+  dùng cấu hình SMTP/Gmail hiện có. SMTP tắt hoặc gửi lỗi không làm mất thông báo;
+  GV thấy trạng thái và số thư đã gửi/thất bại. Việc gửi diễn ra trong yêu cầu đăng,
+  chưa có hàng đợi hoặc tự gửi lại; không đăng lại chỉ để thử gửi vì sẽ tạo thông báo mới.
+  Giới hạn 10 thông báo/giờ/GV. API `GET/POST /courses/<id>/announcements`,
+  POST nhận `title`, `body`, `sendEmail` (boolean, mặc định true); GET có `page`.
 
 - **Quản trị người dùng** (`/admin/users`): ADMIN mở từ trang tài khoản, tìm theo mã,
   email/họ tên, xem danh sách phân trang, khóa/mở tài khoản và thay đổi vai trò.
@@ -188,6 +231,11 @@ Các API nghiệp vụ yêu cầu `Authorization: Bearer <token>`. Các endpoint
 | POST | `/auth/login`, `/auth/register` | Đăng nhập/đăng ký |
 | POST | `/auth/forgot-password`, `/auth/reset-password` | Quên/reset mật khẩu |
 | POST | `/auth/logout` | Thu hồi JWT hiện tại |
+| GET | `/admin/api/audit` | ADMIN tra nhật ký với `action`, `actorId`, `page` |
+| GET/POST | `/courses/<cid>/forum/topics` | Xem/tạo chủ đề; tạo với `title`, `body` |
+| GET | `/courses/<cid>/forum/topics/<tid>` | Nội dung chủ đề |
+| GET/POST | `/courses/<cid>/forum/topics/<tid>/comments` | Xem/bình luận; POST với `body` |
+| PUT/DELETE | `/courses/<cid>/forum/posts/<pid>` | Tác giả sửa/xóa bài; chủ đề dùng `title`, `body`, bình luận dùng `body` |
 | POST | `/auth/change-password` | Đổi mật khẩu với `currentPassword`, `newPassword`; yêu cầu JWT |
 | GET | `/me` | Tài khoản hiện tại |
 | GET/PUT | `/me/profile` | Xem/sửa `fullName`, `bio`, `contact` |

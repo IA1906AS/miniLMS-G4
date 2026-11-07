@@ -4,11 +4,14 @@ from dotenv import load_dotenv
 from flask import Flask, g, jsonify, request
 
 from app.api.admin import bp as admin_bp
+from app.api.announcements import bp as announcements_bp
 from app.api.assessments import bp as assessments_bp
 from app.api.assessments import remove_submission_files, submission_files
 from app.api.audit import write_audit
 from app.api.auth import auth_bp
+from app.api.dashboard import bp as dashboard_bp
 from app.api.errors import register_error_handlers
+from app.api.forum import bp as forum_bp
 from app.api.gate import register_gate
 from app.api.guards import require_role
 from app.api.learning import bp as learning_bp
@@ -180,7 +183,10 @@ def create_app(config=None):
     # ========================================================
 
     app.register_blueprint(auth_bp)
+    app.register_blueprint(dashboard_bp)
     app.register_blueprint(admin_bp)
+    app.register_blueprint(announcements_bp)
+    app.register_blueprint(forum_bp)
     app.register_blueprint(logout_bp)
     app.register_blueprint(signup_bp)
     app.register_blueprint(reset_bp)

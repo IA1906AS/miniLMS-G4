@@ -9,6 +9,33 @@ from app.api.guards import require_role
 bp = Blueprint("admin", __name__)
 
 
+@bp.get("/admin/api/audit")
+@require_role("ADMIN")
+def audit_events():
+    action = request.args.get("action", "").strip()
+    actor = request.args.get("actorId", "").strip()
+    try:
+        page = int(request.args.get("page", "1"))
+    except ValueError:
+        raise ValidationError() from None
+    if len(action) > 100 or len(actor) > 200 or not 1 <= page <= 100000:
+        raise ValidationError()
+    rows, total = current_app.extensions["lms_store"].list_audit(action, actor, page)
+    items = [
+        {
+            "id": row["id"],
+            "createdAt": row["created_at"].isoformat(),
+            "actorId": row["actor_id"],
+            "action": row["action"],
+            "resource": row["resource"],
+            "result": row["result"],
+            "details": row["details"],
+        }
+        for row in rows
+    ]
+    return jsonify({"items": items, "total": total, "page": page, "pageSize": 20})
+
+
 def public_user(user):
     return {
         "id": user.id,

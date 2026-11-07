@@ -9,21 +9,24 @@
         <div>
             <p class="sub">LEARNING MANAGEMENT SYSTEM</p>
 
-            <h1>Chào mừng đến với miniLMS</h1>
+            <h1 id="home-title">Chào mừng đến với miniLMS</h1>
 
-            <p class="sub">
+            <p class="sub" id="home-description">
                 Nền tảng quản lý học tập giúp bạn truy cập tài khoản,
                 theo dõi khóa học và xem kết quả học tập một cách thuận tiện.
             </p>
 
             <div class="home-actions">
-                <a href="{{ url_for('pages.login_page') }}" class="btn-link">
+                <a href="{{ url_for('pages.login_page') }}" class="btn-link guest-only">
                     Đăng nhập
                 </a>
 
-                <a href="{{ url_for('pages.register_page') }}" class="btn-link ghost">
+                <a href="{{ url_for('pages.register_page') }}" class="btn-link ghost guest-only">
                     Tạo tài khoản
                 </a>
+                <a href="{{ url_for('pages.catalog') }}" class="btn-link auth-only" hidden>Vào khóa học</a>
+                <a href="{{ url_for('pages.account') }}" class="btn-link ghost auth-only" hidden>Tài khoản và điểm số</a>
+                <a id="home-admin" href="{{ url_for('pages.admin_users_page') }}" class="btn-link ghost" hidden>Quản trị hệ thống</a>
             </div>
         </div>
     </div>
@@ -52,4 +55,3 @@
     </div>
 </section>
 {% endblock %}
-```

@@ -53,8 +53,11 @@ def reset_message(email: str, token: str) -> EmailMessage:
 
 
 def send_smtp_reset_email(email: str, token: str) -> None:
+    send_smtp_message(reset_message(email, token))
+
+
+def send_smtp_message(message: EmailMessage) -> None:
     cfg = current_app.config
-    message = reset_message(email, token)
     context = ssl.create_default_context()
     options = {"timeout": cfg["SMTP_TIMEOUT_SECONDS"]}
     connection: smtplib.SMTP

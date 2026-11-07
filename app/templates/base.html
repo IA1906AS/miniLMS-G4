@@ -14,6 +14,7 @@
     </title>
 
     <!-- CSS chính -->
+    <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
     <link
         rel="stylesheet"
         href="{{ url_for('static', filename='css/styles.css') }}"
@@ -23,11 +24,36 @@
 </head>
 
 <body>
+    <a href="#main-content" class="skip-link">Đến nội dung chính</a>
+    <aside id="workspace-sidebar" class="workspace-sidebar" aria-label="Không gian làm việc" hidden>
+        <a href="/dashboard" class="sidebar-brand"><span class="logo">m</span><span>miniLMS<small>LEARNING WORKSPACE</small></span></a>
+        <div class="sidebar-workspace"><span class="workspace-dot"></span><span id="workspace-role">Không gian của bạn</span><span aria-hidden="true">⌄</span></div>
+        <p class="sidebar-caption">KHÔNG GIAN LÀM VIỆC</p>
+        <nav class="sidebar-links" aria-label="Điều hướng theo vai trò">
+            <a href="/dashboard" data-nav="/dashboard"><span aria-hidden="true">◫</span>Tổng quan</a>
+            <a href="/catalog" data-nav="/catalog"><span aria-hidden="true">▦</span><span id="workspace-courses-label">Khóa học</span></a>
+            <a id="workspace-grades-link" href="/grades" data-nav="/grades" data-workspace-roles="STUDENT INSTRUCTOR" hidden><span aria-hidden="true">↗</span><span id="workspace-grades-label">Kết quả học tập</span></a>
+            <a href="/admin/users" data-nav="/admin/users" data-workspace-roles="ADMIN" hidden><span aria-hidden="true">◎</span>Người dùng</a>
+            <a href="/admin/audit" data-nav="/admin/audit" data-workspace-roles="ADMIN" hidden><span aria-hidden="true">≡</span>Nhật ký hoạt động</a>
+        </nav>
+        <p class="sidebar-caption">CÁ NHÂN</p>
+        <nav class="sidebar-links" aria-label="Tài khoản cá nhân">
+            <a href="/account" data-nav="/account"><span aria-hidden="true">◉</span>Hồ sơ của tôi</a>
+            <a href="/changepassword" data-nav="/changepassword"><span aria-hidden="true">⚙</span>Đổi mật khẩu</a>
+        </nav>
+        <div class="sidebar-bottom"><div class="sidebar-note"><strong>Học tập. Kết nối. Phát triển.</strong><p>Mỗi ngày một bước tiến mới.</p></div><button id="workspace-logout" type="button">↪ &nbsp; Đăng xuất</button></div>
+    </aside>
+    <button id="sidebar-overlay" class="sidebar-overlay" type="button" aria-label="Đóng điều hướng" hidden></button>
 
     <!-- ==================================
          HEADER
          ================================== -->
     <header>
+        <div id="workspace-topbar" class="workspace-topbar" hidden>
+            <button id="sidebar-toggle" class="sidebar-toggle" type="button" aria-controls="workspace-sidebar" aria-expanded="false" aria-label="Mở điều hướng">☰</button>
+            <div><span class="topbar-label">KHÔNG GIAN LÀM VIỆC</span><p id="workspace-page-title">Tổng quan</p></div>
+            <div class="topbar-user"><span id="workspace-user-initial" class="user-initial">M</span><div><strong id="workspace-user-name"></strong><small id="workspace-user-role"></small></div></div>
+        </div>
 
         <!-- LOGO -->
         <div class="brand">
@@ -83,12 +109,13 @@
             </a>
 
         </nav>
+        <button id="theme-toggle" class="theme-toggle" type="button" aria-label="Chuyển sang giao diện sáng">☀ Sáng</button>
     </header>
 
     <!-- ==================================
          MAIN CONTENT
          ================================== -->
-    <main>
+    <main id="main-content" tabindex="-1">
         {% block content %}{% endblock %}
     </main>
 

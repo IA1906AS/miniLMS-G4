@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}Diễn đàn khóa học{% endblock %}
+{% block content %}
+<section class="card">
+    <a href="{{ url_for('pages.catalog') }}">← Khóa học</a>
+    <h1 id="forum-title">Diễn đàn khóa học</h1>
+    <div id="forum-msg" class="msg" role="status" aria-live="polite"></div>
+</section>
+<div id="forum-panel" hidden>
+    <section class="card">
+        <h2>Tạo chủ đề</h2>
+        <form id="forum-create" hidden>
+            <label for="forum-new-title">Tiêu đề</label>
+            <input id="forum-new-title" maxlength="200" required>
+            <label for="forum-new-body">Nội dung</label>
+            <textarea id="forum-new-body" maxlength="10000" rows="5" required></textarea>
+            <button type="submit">Đăng chủ đề</button>
+        </form>
+        <h2>Chủ đề thảo luận</h2>
+        <ul id="forum-topics" class="member-list"></ul>
+        <button id="topics-prev" type="button">Trang trước</button>
+        <span id="topics-page" role="status"></span>
+        <button id="topics-next" type="button">Trang sau</button>
+    </section>
+    <section id="forum-detail" class="card" hidden>
+        <div id="forum-topic"></div>
+        <h2>Bình luận</h2>
+        <ul id="forum-comments" class="member-list"></ul>
+        <button id="comments-prev" type="button">Trang trước</button>
+        <span id="comments-page" role="status"></span>
+        <button id="comments-next" type="button">Trang sau</button>
+        <form id="forum-reply" hidden>
+            <label for="forum-reply-body">Bình luận của bạn</label>
+            <textarea id="forum-reply-body" maxlength="10000" rows="4" required></textarea>
+            <button type="submit">Gửi bình luận</button>
+        </form>
+    </section>
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/forum.js') }}"></script>
+{% endblock %}

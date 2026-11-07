@@ -25,6 +25,7 @@ from flask import (
     request,
 )
 
+from app.api.audit import write_audit
 from app.api.errors import (
     InvalidCredentials,
     Unauthenticated,
@@ -308,6 +309,7 @@ def login():
 
     # STEP 7: Failed login -> increment counter, lock when threshold reached
     if user is None or not password_ok or user.is_locked:
+        write_audit(user.id if user else None, "LOGIN", "/auth/login", "FAILURE")
         failures += 1
 
         if failures >= max_attempts:
@@ -323,6 +325,7 @@ def login():
 
     # STEP 9: Issue JWT
     access_token = create_token(user)
+    write_audit(user.id, "LOGIN", "/auth/login", "SUCCESS")
 
     return jsonify(
         {

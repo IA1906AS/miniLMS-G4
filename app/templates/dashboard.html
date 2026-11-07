@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}Tổng quan{% endblock %}
+{% block content %}
+<div class="dashboard-page">
+    <div id="dashboard-status" class="msg show" role="status" aria-live="polite">Đang tải không gian làm việc…</div>
+    <button id="dashboard-retry" type="button" class="ghost" hidden>Thử lại</button>
+    <div id="dashboard-content" hidden>
+        <section class="dashboard-hero">
+            <div><p id="dashboard-eyebrow" class="eyebrow">KHÔNG GIAN HỌC TẬP</p>
+                <h1 id="dashboard-heading">Tổng quan</h1>
+                <p id="dashboard-description"></p>
+                <a id="dashboard-primary" class="btn-link" href="/catalog">Vào khóa học <span aria-hidden="true">→</span></a>
+            </div>
+            <div class="hero-orbit" aria-hidden="true"><div class="orbit-center">LMS</div><span class="orbit-dot one"></span><span class="orbit-dot two"></span><span class="orbit-dot three"></span></div>
+        </section>
+        <section id="dashboard-stats" class="stat-grid" aria-label="Số liệu tổng quan"></section>
+        <div class="dashboard-columns">
+            <div>
+                <section class="card dashboard-section">
+                    <div class="section-heading"><div><p class="eyebrow">KHÓA HỌC</p><h2 id="dashboard-courses-title">Khóa học của bạn</h2></div><a href="/catalog">Xem tất cả →</a></div>
+                    <div id="dashboard-courses" class="course-grid"></div>
+                </section>
+                <section id="dashboard-deadlines-section" class="card dashboard-section" hidden>
+                    <div class="section-heading"><h2 id="dashboard-deadlines-title">Hạn nộp sắp tới</h2><span class="pill">Bài tập</span></div>
+                    <ul id="dashboard-deadlines" class="dashboard-list"></ul>
+                </section>
+                <section id="dashboard-activity-section" class="card dashboard-section" hidden>
+                    <div class="section-heading"><h2>Hoạt động gần đây</h2><a href="/admin/audit">Nhật ký →</a></div>
+                    <ul id="dashboard-activity" class="dashboard-list"></ul>
+                </section>
+            </div>
+            <aside class="dashboard-aside">
+                <section class="card dashboard-section"><p class="eyebrow">BẮT ĐẦU TỪ ĐÂY</p><h2>Truy cập nhanh</h2><div id="dashboard-actions" class="quick-actions"></div></section>
+                <section id="dashboard-announcements-section" class="card dashboard-section" hidden>
+                    <div class="section-heading"><h2>Thông báo mới</h2><span aria-hidden="true">◌</span></div>
+                    <ul id="dashboard-announcements" class="dashboard-list"></ul>
+                </section>
+                <section class="dashboard-tip"><span class="pill">Gợi ý</span><h3 id="dashboard-tip-title"></h3><p id="dashboard-tip-body"></p></section>
+            </aside>
+        </div>
+    </div>
+</div>
+{% endblock %}
+{% block scripts %}<script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>{% endblock %}

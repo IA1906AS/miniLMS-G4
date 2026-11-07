@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}Nhật ký hoạt động{% endblock %}
+{% block content %}
+<section class="card">
+    <h1>Nhật ký hoạt động</h1>
+    <div id="audit-msg" class="msg" role="status" aria-live="polite"></div>
+    <div id="audit-panel" hidden>
+        <form id="audit-filter">
+            <label for="audit-action">Sự kiện (để trống để xem tất cả)</label>
+            <input id="audit-action" maxlength="100" placeholder="LOGIN, UPDATE_GRADE, ADMIN_UPDATE_USER…">
+            <label for="audit-actor">Mã người dùng</label>
+            <input id="audit-actor" maxlength="200" placeholder="Ví dụ: u1">
+            <button type="submit">Lọc nhật ký</button>
+        </form>
+        <ul id="audit-list" class="member-list"></ul>
+        <button id="audit-prev" type="button">Trang trước</button>
+        <span id="audit-page" role="status"></span>
+        <button id="audit-next" type="button">Trang sau</button>
+    </div>
+    <p><a href="{{ url_for('pages.admin_users_page') }}">Quản lý người dùng</a></p>
+</section>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/audit.js') }}"></script>
+{% endblock %}

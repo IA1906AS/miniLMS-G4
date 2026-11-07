@@ -52,10 +52,14 @@ def register_gate(app):
             "/register",
             "/resetpassword",
             "/account",
+            "/dashboard",
+            "/grades",
             "/catalog",
             "/study",
+            "/forum",
             "/changepassword",
             "/admin/users",
+            "/admin/audit",
         }
 
         public_apis = {

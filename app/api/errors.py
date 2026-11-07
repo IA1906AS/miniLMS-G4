@@ -65,14 +65,14 @@ def log_forbidden():
 
     actor_id = actor.get("id") if isinstance(actor, dict) else None
 
-    if request.method == "PUT":
+    if request.method == "PUT" and "/grades/" in request.path:
         action = "UPDATE_GRADE"
 
-    elif request.method == "GET":
+    elif request.method == "GET" and request.path.endswith("/grades"):
         action = "VIEW_GRADES"
 
     else:
-        action = request.method
+        action = request.method + "_ACCESS_DENIED"
 
     write_audit(
         actor_id=actor_id,
