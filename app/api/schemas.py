@@ -80,6 +80,21 @@ def validate_reset_confirm(data):
     return token, password
 
 
+def validate_change_password(data):
+    if not isinstance(data, dict) or set(data) != {"currentPassword", "newPassword"}:
+        raise ValidationError()
+
+    current = data["currentPassword"]
+    new = data["newPassword"]
+    if not isinstance(current, str) or not isinstance(new, str):
+        raise ValidationError()
+    if not 1 <= len(current.encode("utf-8")) <= 72:
+        raise ValidationError()
+    if not 8 <= len(new.encode("utf-8")) <= 72 or current == new:
+        raise ValidationError()
+    return current, new
+
+
 def validate_course_body(data, *, default_instructor=None):
     if (
         not isinstance(data, dict)

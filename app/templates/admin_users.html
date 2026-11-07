@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}Quản lý người dùng{% endblock %}
+{% block content %}
+<section class="card">
+    <h1>Quản lý người dùng</h1>
+    <div id="admin-msg" class="msg" role="status" aria-live="polite"></div>
+    <div id="admin-panel" hidden>
+        <form id="user-search">
+            <label for="user-query">Tìm theo mã, email hoặc họ tên</label>
+            <input id="user-query" type="search" maxlength="200">
+            <button type="submit">Tìm kiếm</button>
+        </form>
+        <p>Khóa tài khoản hoặc đổi vai trò sẽ thu hồi các phiên đăng nhập hiện tại.
+            Chuyển các khóa học cho giảng viên khác trước khi đổi vai trò giảng viên phụ trách.</p>
+        <ul id="admin-user-list" class="member-list"></ul>
+        <button id="users-prev" type="button">Trang trước</button>
+        <span id="users-page" role="status"></span>
+        <button id="users-next" type="button">Trang sau</button>
+    </div>
+    <p><a href="{{ url_for('pages.account') }}">Quay lại tài khoản</a></p>
+</section>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/admin.js') }}"></script>
+{% endblock %}

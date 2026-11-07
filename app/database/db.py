@@ -135,11 +135,16 @@ class PostgresStore:
                 "bio",
                 "contact",
                 "avatar_filename",
+                "is_locked",
             ):
                 definition = (
-                    "INTEGER NOT NULL DEFAULT 0"
-                    if column == "token_version"
-                    else "TEXT NOT NULL DEFAULT ''"
+                    "BOOLEAN NOT NULL DEFAULT FALSE"
+                    if column == "is_locked"
+                    else (
+                        "INTEGER NOT NULL DEFAULT 0"
+                        if column == "token_version"
+                        else "TEXT NOT NULL DEFAULT ''"
+                    )
                 )
                 conn.execute(
                     sql.SQL(
@@ -373,6 +378,78 @@ class PostgresStore:
 
             if cursor.rowcount != 1:
                 raise ValueError("User not found")
+
+    def change_password_atomic(
+        self, user_id: str, old_hash: str, new_hash: str
+    ) -> bool:
+        """Replace the verified password and invalidate sessions and reset links."""
+        with self._connect() as conn:
+            cursor = conn.execute(
+                "UPDATE users SET password_hash = %s, token_version = token_version + 1 "
+                "WHERE id = %s AND password_hash = %s",
+                (new_hash, user_id, old_hash),
+            )
+            if cursor.rowcount != 1:
+                return False
+            conn.execute("DELETE FROM reset_tokens WHERE user_id = %s", (user_id,))
+            return True
+
+    def search_users(self, query: str, limit: int, offset: int):
+        with self._connect() as conn:
+            params = (query, query, query)
+            where = "WHERE strpos(lower(id), lower(%s)) > 0 OR strpos(lower(email), lower(%s)) > 0 OR strpos(lower(full_name), lower(%s)) > 0"
+            total = conn.execute(
+                "SELECT count(*) AS n FROM users " + where, params
+            ).fetchone()["n"]
+            rows = conn.execute(
+                "SELECT * FROM users "
+                + where
+                + " ORDER BY lower(email), id LIMIT %s OFFSET %s",
+                (*params, limit, offset),
+            ).fetchall()
+            return [_user(row) for row in rows], total
+
+    def administer_user(self, actor_id: str, user_id: str, changes: dict):
+        from app.api.errors import Forbidden, NotFound, UserUpdateConflict
+
+        with self._connect() as conn:
+            # Serialize administration across workers, then recheck the actor.
+            conn.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                ("minilms:users:" + self.schema,),
+            )
+            actor = conn.execute(
+                "SELECT * FROM users WHERE id = %s FOR UPDATE", (actor_id,)
+            ).fetchone()
+            if actor is None or actor["role"] != "ADMIN" or actor["is_locked"]:
+                raise Forbidden()
+            target = conn.execute(
+                "SELECT * FROM users WHERE id = %s FOR UPDATE", (user_id,)
+            ).fetchone()
+            if target is None:
+                raise NotFound()
+            role = changes.get("role", target["role"])
+            locked = changes.get("isLocked", target["is_locked"])
+            if actor_id == user_id and (role != "ADMIN" or locked):
+                raise UserUpdateConflict("SELF_ADMIN_CHANGE")
+            if (
+                role != "INSTRUCTOR"
+                and target["role"] == "INSTRUCTOR"
+                and conn.execute(
+                    "SELECT 1 FROM courses WHERE instructor_id = %s LIMIT 1", (user_id,)
+                ).fetchone()
+            ):
+                raise UserUpdateConflict("INSTRUCTOR_HAS_COURSES")
+            if role != target["role"] or locked != target["is_locked"]:
+                conn.execute(
+                    "UPDATE users SET role = %s, is_locked = %s, token_version = token_version + 1 WHERE id = %s",
+                    (role, locked, user_id),
+                )
+                conn.execute("DELETE FROM reset_tokens WHERE user_id = %s", (user_id,))
+            row = conn.execute(
+                "SELECT * FROM users WHERE id = %s", (user_id,)
+            ).fetchone()
+            return _user(row)
 
     def reset_password_atomic(
         self,
@@ -845,6 +922,7 @@ def _user(row: dict[str, Any]) -> User:
         bio=row["bio"],
         contact=row["contact"],
         avatar_filename=row["avatar_filename"],
+        is_locked=row["is_locked"],
     )
 
 

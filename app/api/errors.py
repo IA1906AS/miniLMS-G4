@@ -48,6 +48,13 @@ class AccountLocked(APIError):
     error_code = "ACCOUNT_LOCKED"
 
 
+class UserUpdateConflict(APIError):
+    status_code = 409
+
+    def __init__(self, code):
+        self.error_code = code
+
+
 # ==========================================
 # 2. GHI AUDIT LOG KHI BI TU CHOI QUYEN
 # ==========================================

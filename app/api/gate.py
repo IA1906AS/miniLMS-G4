@@ -54,6 +54,8 @@ def register_gate(app):
             "/account",
             "/catalog",
             "/study",
+            "/changepassword",
+            "/admin/users",
         }
 
         public_apis = {
@@ -109,7 +111,7 @@ def register_gate(app):
 
         user = store.get_user(payload["sub"])
 
-        if user is None:
+        if user is None or user.is_locked:
             raise Unauthenticated()
 
         # ====================================================

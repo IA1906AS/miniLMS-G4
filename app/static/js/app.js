@@ -346,6 +346,9 @@ async function forgotForm(event) {
     }
 
     const messageBox = $('forgot-msg');
+    const button = $('forgot-form').querySelector('button[type="submit"]');
+    if (button.disabled) return;
+    button.disabled = true;
 
     try {
         const data = await api('/auth/forgot-password', {
@@ -375,6 +378,8 @@ async function forgotForm(event) {
             translate(error.message),
             false
         );
+    } finally {
+        button.disabled = false;
     }
 }
 
@@ -389,6 +394,19 @@ async function resetForm(event) {
     }
 
     const messageBox = $('confirm-msg');
+    const password = $('reset-new').value;
+    if (password !== $('reset-confirm').value) {
+        flash(messageBox, 'Mật khẩu xác nhận không khớp.', false);
+        return;
+    }
+    const passwordLength = new TextEncoder().encode(password).length;
+    if (passwordLength < 8 || passwordLength > 72) {
+        flash(messageBox, 'Mật khẩu mới phải dài từ 8 đến 72 byte.', false);
+        return;
+    }
+    const button = $('reset-form').querySelector('button[type="submit"]');
+    if (button.disabled) return;
+    button.disabled = true;
 
     try {
         await api('/auth/reset-password', {
@@ -409,6 +427,12 @@ async function resetForm(event) {
         if (tokenInput) {
             tokenInput.value = '';
         }
+        $('reset-confirm').value = '';
+        $('reset-form').hidden = true;
+
+        sessionStorage.removeItem(TOKEN_KEY);
+        updateNavigation();
+        $('reset-login').hidden = false;
 
         flash(
             messageBox,
@@ -418,9 +442,13 @@ async function resetForm(event) {
     } catch (error) {
         flash(
             messageBox,
-            translate(error.message),
+            error.message === 'VALIDATION_ERROR'
+                ? 'Liên kết không hợp lệ, đã hết hạn hoặc đã sử dụng; hoặc mật khẩu chưa hợp lệ. Vui lòng kiểm tra mật khẩu hoặc yêu cầu liên kết mới.'
+                : translate(error.message),
             false
         );
+    } finally {
+        button.disabled = false;
     }
 }
 
@@ -457,6 +485,7 @@ async function loadAccount() {
         }
 
         initGradeEditor(me.role);
+        if ($('admin-users-link')) $('admin-users-link').hidden = me.role !== 'ADMIN';
         initProfileFeatures();
 
     } catch (error) {
@@ -842,9 +871,70 @@ function initPasswordToggle() {
 // KHỞI TẠO
 // ==========================================
 
+async function initChangePasswordPage(form) {
+    if (!token()) {
+        window.location.replace('/login');
+        return;
+    }
+    try {
+        await api('/me', { auth: true });
+        form.hidden = false;
+    } catch (error) {
+        if (error.status === 401) {
+            sessionStorage.removeItem(TOKEN_KEY);
+            window.location.replace('/login');
+            return;
+        }
+        flash($('change-password-msg'), translate(error.message), false);
+    }
+}
+
+async function changePasswordForm(event) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const button = $('change-password-button');
+    const message = $('change-password-msg');
+    const current = $('current-password').value;
+    const next = $('new-password').value;
+    if (next !== $('confirm-password').value) {
+        flash(message, 'Mật khẩu xác nhận không khớp.', false);
+        return;
+    }
+    const length = new TextEncoder().encode(next).length;
+    if (length < 8 || length > 72 || current === next) {
+        flash(message, 'Mật khẩu mới phải khác mật khẩu hiện tại và dài từ 8 đến 72 byte.', false);
+        return;
+    }
+    button.disabled = true;
+    try {
+        await api('/auth/change-password', {
+            method: 'POST', auth: true,
+            body: { currentPassword: current, newPassword: next }
+        });
+        form.reset();
+        sessionStorage.removeItem(TOKEN_KEY);
+        updateNavigation();
+        form.hidden = true;
+        $('change-password-login').hidden = false;
+        flash(message, 'Đổi mật khẩu thành công. Vui lòng đăng nhập lại.');
+    } catch (error) {
+        flash(message, error.message === 'INVALID_CREDENTIALS'
+            ? 'Mật khẩu hiện tại không đúng. Vui lòng thử lại.'
+            : translate(error.message), false);
+    } finally {
+        button.disabled = false;
+    }
+}
+
 function initApp() {
     updateNavigation();
     initPasswordToggle();
+
+    const changeForm = $('change-password-form');
+    if (changeForm) {
+        initChangePasswordPage(changeForm);
+        changeForm.addEventListener('submit', changePasswordForm);
+    }
 
     const loginFormElement = $('login-form');
     if (loginFormElement) {
@@ -863,6 +953,14 @@ function initApp() {
 
     const resetFormElement = $('reset-form');
     if (resetFormElement) {
+        const resetToken = new URLSearchParams(window.location.hash.slice(1)).get('token');
+        if (resetToken) {
+            $('reset-token').value = resetToken;
+            $('reset-section').hidden = false;
+            $('forgot-section').hidden = true;
+            history.replaceState(null, '', window.location.pathname);
+            $('reset-new').focus();
+        }
         resetFormElement.addEventListener('submit', resetForm);
     }
 

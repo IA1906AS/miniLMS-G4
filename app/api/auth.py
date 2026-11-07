@@ -307,7 +307,7 @@ def login():
         password_ok = False
 
     # STEP 7: Failed login -> increment counter, lock when threshold reached
-    if user is None or not password_ok:
+    if user is None or not password_ok or user.is_locked:
         failures += 1
 
         if failures >= max_attempts:

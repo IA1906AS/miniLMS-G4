@@ -3,6 +3,7 @@ import os
 from dotenv import load_dotenv
 from flask import Flask, g, jsonify, request
 
+from app.api.admin import bp as admin_bp
 from app.api.assessments import bp as assessments_bp
 from app.api.assessments import remove_submission_files, submission_files
 from app.api.audit import write_audit
@@ -56,7 +57,8 @@ CSP_POLICY = (
 
 
 def create_app(config=None):
-    load_dotenv(BASE_DIR / ".env")
+    # Hosting environment variables take precedence over local development values.
+    load_dotenv(BASE_DIR / ".env", override=False)
     app = Flask(__name__)
 
     # ========================================================
@@ -91,11 +93,25 @@ def create_app(config=None):
         AVATAR_UPLOAD_DIR=os.environ.get(
             "AVATAR_UPLOAD_DIR", os.path.join(app.instance_path, "avatars")
         ),
+        PUBLIC_BASE_URL=os.environ.get("PUBLIC_BASE_URL", "http://127.0.0.1:5000"),
+        SMTP_ENABLED=os.environ.get("SMTP_ENABLED") == "1",
+        SMTP_HOST=os.environ.get("SMTP_HOST", ""),
+        SMTP_PORT=int(os.environ.get("SMTP_PORT", "587")),
+        SMTP_FROM=os.environ.get("SMTP_FROM", ""),
+        SMTP_USERNAME=os.environ.get("SMTP_USERNAME", ""),
+        SMTP_PASSWORD=os.environ.get("SMTP_PASSWORD", ""),
+        SMTP_USE_TLS=os.environ.get("SMTP_USE_TLS", "1") == "1",
+        SMTP_USE_SSL=os.environ.get("SMTP_USE_SSL", "0") == "1",
+        SMTP_TIMEOUT_SECONDS=int(os.environ.get("SMTP_TIMEOUT_SECONDS", "10")),
     )
 
     # Allow tests to override configuration.
     if config is not None:
         app.config.update(config)
+
+    from app.api.mail import validate_mail_config
+
+    validate_mail_config(app.config)
 
     # ========================================================
     # 2. VALIDATE JWT SECRET
@@ -164,6 +180,7 @@ def create_app(config=None):
     # ========================================================
 
     app.register_blueprint(auth_bp)
+    app.register_blueprint(admin_bp)
     app.register_blueprint(logout_bp)
     app.register_blueprint(signup_bp)
     app.register_blueprint(reset_bp)

@@ -15,11 +15,14 @@ from __future__ import annotations
 
 import hashlib
 import secrets
+import smtplib
 
+import bcrypt
 from flask import (
     Blueprint,
     Response,
     current_app,
+    g,
     jsonify,
     make_response,
     request,
@@ -27,15 +30,49 @@ from flask import (
 
 from app.api.audit import write_audit
 from app.api.auth import hash_password
-from app.api.errors import ValidationError
+from app.api.errors import InvalidCredentials, ValidationError
 from app.api.local_mail import send_reset_email
+from app.api.mail import send_smtp_reset_email
 from app.api.rate_limit import check_rate_limit, client_ip
 from app.api.schemas import (
+    validate_change_password,
     validate_reset_confirm,
     validate_reset_request,
 )
 
 bp = Blueprint("reset", __name__)
+
+
+@bp.post("/auth/change-password")
+def change_password():
+    current, new = validate_change_password(request.get_json(silent=True))
+    allowed, retry_after = check_rate_limit(
+        key=f"change-password:user:{g.actor['id']}",
+        limit=5,
+        window_seconds=15 * 60,
+    )
+    if not allowed:
+        return _rate_limited(retry_after)
+
+    store = _store()
+    user_id = g.actor["id"]
+    user = store.get_user(user_id)
+    old_hash = user.password_hash
+    if not bcrypt.checkpw(current.encode("utf-8"), old_hash.encode("utf-8")):
+        raise InvalidCredentials()
+
+    new_hash = hash_password(new, rounds=int(current_app.config["BCRYPT_ROUNDS"]))
+    if not store.change_password_atomic(user_id, old_hash, new_hash):
+        raise InvalidCredentials()
+
+    write_audit(
+        actor_id=user_id,
+        action="CHANGE_PASSWORD",
+        resource=f"users/{user_id}/password",
+        result="SUCCESS",
+    )
+    return jsonify({"status": "password-updated"})
+
 
 TOKEN_BYTES = 32
 
@@ -169,13 +206,15 @@ def forgot_password() -> tuple[Response, int] | Response:
             ttl,
         )
 
-    # STEP 7: LOCAL EMAIL SIMULATION
-    # Enabled only for local development.
-    _send_local_reset_email(
-        email=email,
-        token=token,
-        user_id=user_id,
-    )
+    # Keep the public response generic even when delivery fails.
+    if user_id is not None and cfg["SMTP_ENABLED"]:
+        try:
+            send_smtp_reset_email(email, token)
+        except (OSError, smtplib.SMTPException):
+            # SMTP exceptions can contain recipient addresses; do not log details.
+            current_app.logger.error("Password reset email delivery failed.")
+    else:
+        _send_local_reset_email(email=email, token=token, user_id=user_id)
 
     # STEP 8: GENERIC RESPONSE
     # Same response for existing and nonexistent emails.

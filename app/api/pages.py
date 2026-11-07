@@ -48,3 +48,14 @@ def study():
 def reset_password_page():
     """Trang đặt lại mật khẩu."""
     return render_template("resetpassword.html")
+
+
+@bp.get("/changepassword")
+def change_password_page():
+    """Trang đổi mật khẩu cho người dùng đã đăng nhập."""
+    return render_template("changepassword.html")
+
+
+@bp.get("/admin/users")
+def admin_users_page():
+    return render_template("admin_users.html")

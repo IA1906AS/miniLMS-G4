@@ -48,6 +48,31 @@ JWT_SECRET=dev-only-secret-at-least-32-characters-long!!
 
 Thay khóa JWT và thông tin đăng nhập trước khi triển khai thực tế.
 
+## Đổi mật khẩu và email khôi phục
+
+Trang tài khoản có liên kết tới `/changepassword`. Người dùng xác nhận mật khẩu
+hiện tại trước khi đặt mật khẩu mới. Đổi thành công sẽ vô hiệu hóa mọi JWT và
+token khôi phục cũ của tài khoản, yêu cầu đăng nhập lại.
+
+### Link khôi phục lưu trong instance/mailbox
+
+Cấu hình local mặc định đã bật `LOCAL_EMAIL_ENABLED=1` và tắt SMTP
+(`SMTP_ENABLED=0`). Không cần nhập tài khoản hay mật khẩu gửi mail.
+
+Chạy ứng dụng bằng `.\scripts\run.ps1` hoặc:
+
+```powershell
+.\.venv\Scripts\python.exe -m flask --app app run --debug
+```
+
+Mở `/resetpassword`, nhập email của tài khoản đã tồn tại rồi gửi yêu cầu.
+Mở file `reset-*.txt` mới nhất trong `instance/mailbox/`, sao chép liên kết
+vào trình duyệt và đặt mật khẩu mới. Thư được lưu thành file trên máy.
+
+Liên kết mặc định hết hạn sau 15 phút và chỉ dùng được một lần. Chức năng
+lưu thư local chỉ hoạt động khi chạy debug. Nếu chưa thấy file, kiểm tra email
+đã đăng ký và cấu hình `LOCAL_EMAIL_ENABLED=1`, `SMTP_ENABLED=0`.
+
 ## Chuyển dữ liệu SQLite hiện có
 
 Ứng dụng không còn backend SQLite hoặc memory. `sqlite3` chỉ được dùng bởi
@@ -86,6 +111,14 @@ Chỉ được tạo khi database chưa có người dùng. Mật khẩu chung: 
 | `chi.sv@lms.test`, `dung.sv@lms.test`, `em.sv@lms.test` | STUDENT |
 
 ## Các chức năng và giao diện
+
+- **Quản trị người dùng** (`/admin/users`): ADMIN mở từ trang tài khoản, tìm theo mã,
+  email/họ tên, xem danh sách phân trang, khóa/mở tài khoản và thay đổi vai trò.
+  Khóa hoặc đổi vai trò thu hồi JWT và token khôi phục cũ. ADMIN không thể tự khóa
+  hoặc hạ quyền mình; giảng viên phải chuyển khóa học trước khi đổi sang vai trò khác.
+  Trạng thái khóa được lưu trong PostgreSQL, không bị xóa khi reset mật khẩu.
+  API: `GET /admin/api/users?q=...&page=1`, `PUT /admin/api/users/<id>` với
+  `role` (`ADMIN`, `INSTRUCTOR`, `STUDENT`) và/hoặc `isLocked` (boolean).
 
 - **Xác thực:** đăng ký sinh viên, đăng nhập, đăng xuất thu hồi JWT, quên/reset mật khẩu.
 - **Tài khoản** (`/account`): sửa họ tên, giới thiệu, thông tin liên hệ; tải/thay/xóa
@@ -155,6 +188,7 @@ Các API nghiệp vụ yêu cầu `Authorization: Bearer <token>`. Các endpoint
 | POST | `/auth/login`, `/auth/register` | Đăng nhập/đăng ký |
 | POST | `/auth/forgot-password`, `/auth/reset-password` | Quên/reset mật khẩu |
 | POST | `/auth/logout` | Thu hồi JWT hiện tại |
+| POST | `/auth/change-password` | Đổi mật khẩu với `currentPassword`, `newPassword`; yêu cầu JWT |
 | GET | `/me` | Tài khoản hiện tại |
 | GET/PUT | `/me/profile` | Xem/sửa `fullName`, `bio`, `contact` |
 | POST/DELETE | `/me/avatar` | Multipart `avatar` / xóa ảnh |
@@ -212,5 +246,5 @@ workflow riêng chạy Semgrep.
 Bcrypt, JWT HS256 có `jti`/token versioning, logout phía server, khóa tạm sau nhiều
 lần sai, rate limit PostgreSQL atomic, reset token SHA-256 dùng một lần/hết hạn,
 phản hồi quên mật khẩu không tiết lộ tài khoản, CSP và HTTP security headers.
-Email khôi phục hiện là mô phỏng file trong `instance/mailbox`, cần bật
-`LOCAL_EMAIL_ENABLED=1` và debug; chưa tích hợp dịch vụ gửi email thật.
+Email khôi phục hỗ trợ SMTP với liên kết có thời hạn, dùng một lần. Có thể mô phỏng
+email trong `instance/mailbox` bằng `LOCAL_EMAIL_ENABLED=1` và debug khi tắt SMTP.

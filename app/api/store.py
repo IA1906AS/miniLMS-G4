@@ -16,6 +16,7 @@ class User:
     bio: str = ""
     contact: str = ""
     avatar_filename: str = ""
+    is_locked: bool = False
 
 
 @dataclass
