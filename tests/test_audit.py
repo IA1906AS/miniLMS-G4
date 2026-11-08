@@ -44,7 +44,7 @@ def test_audit_persists_grade_change_and_restart(client):
     teacher = auth(client, "an.gv@lms.test")
     assert (
         client.put(
-            "/courses/c1/grades/u4", headers=teacher, json={"score": 9}
+            "/courses/c1/grades/u4", headers=teacher, json={"score": 9, "version": 0}
         ).status_code
         == 200
     )

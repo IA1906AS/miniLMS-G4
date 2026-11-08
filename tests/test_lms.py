@@ -16,6 +16,124 @@ SECRET = "test-secret-for-local-pytest-only-0123456789abcdef"
 PASSWORD = "Lms@2026"
 
 
+def test_pattern03_stale_editor_cannot_overwrite_grade(app):
+    """A stale editor must receive a conflict and preserve the first write.
+
+    Both sessions read before either saves. The stale write is rejected.
+    The existing fixture isolates all writes in a dedicated test schema.
+    """
+    editor_a = app.test_client()
+    editor_b = app.test_client()
+    auth_a = headers(token_for(editor_a, "an.gv@lms.test"))
+    auth_b = headers(token_for(editor_b, "an.gv@lms.test"))
+
+    snapshot_a = editor_a.get("/courses/c1/grades", headers=auth_a)
+    snapshot_b = editor_b.get("/courses/c1/grades", headers=auth_b)
+    assert snapshot_a.status_code == snapshot_b.status_code == 200
+    assert snapshot_a.get_json() == snapshot_b.get_json()
+    initial_score = next(
+        row["score"] for row in snapshot_b.get_json() if row["studentId"] == "u5"
+    )
+
+    saved_a = editor_a.put(
+        "/courses/c1/grades/u5", json={"score": 8.5, "version": 0}, headers=auth_a
+    )
+    assert saved_a.status_code == 200
+    after_a = editor_a.get("/courses/c1/grades", headers=auth_a)
+    assert (
+        next(row["score"] for row in after_a.get_json() if row["studentId"] == "u5")
+        == 8.5
+    )
+
+    # B saves using its old snapshot, without reloading after A's write.
+    assert (
+        next(row["score"] for row in snapshot_b.get_json() if row["studentId"] == "u5")
+        == initial_score
+    )
+    saved_b = editor_b.put(
+        "/courses/c1/grades/u5", json={"score": 9.5, "version": 0}, headers=auth_b
+    )
+    assert_error(saved_b, 409, "GRADE_CONFLICT")
+    final = editor_a.get("/courses/c1/grades", headers=auth_a)
+    assert final.status_code == 200
+    assert (
+        next(row["score"] for row in final.get_json() if row["studentId"] == "u5")
+        == 8.5
+    )
+    current = next(row for row in final.get_json() if row["studentId"] == "u5")
+    assert current["version"] == 1
+    refreshed_save = editor_b.put(
+        "/courses/c1/grades/u5",
+        json={"score": 9.5, "version": current["version"]},
+        headers=auth_b,
+    )
+    assert refreshed_save.status_code == 200
+    assert refreshed_save.get_json()["version"] == 2
+
+
+def test_pattern03_simultaneous_writers_only_one_succeeds(app):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+
+    auth = headers(token_for(app.test_client(), "an.gv@lms.test"))
+    barrier = Barrier(2)
+
+    def save(score):
+        with app.test_client() as client:
+            snapshot = client.get("/courses/c1/grades", headers=auth).get_json()
+            version = next(
+                row["version"] for row in snapshot if row["studentId"] == "u5"
+            )
+            barrier.wait(timeout=10)
+            response = client.put(
+                "/courses/c1/grades/u5",
+                headers=auth,
+                json={"score": score, "version": version},
+            )
+            return response.status_code, score
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(save, [8.5, 9.5]))
+    assert sorted(status for status, _ in results) == [200, 409]
+    winner = next(score for status, score in results if status == 200)
+    final = app.test_client().get("/courses/c1/grades", headers=auth).get_json()
+    grade = next(row for row in final if row["studentId"] == "u5")
+    assert grade["score"] == winner
+    assert grade["version"] == 1
+
+
+@pytest.mark.parametrize("version", [None, True, -1, 1.5, "0", 2147483647])
+def test_pattern03_invalid_version(client, version):
+    auth = headers(token_for(client, "an.gv@lms.test"))
+    response = client.put(
+        "/courses/c1/grades/u5",
+        headers=auth,
+        json={"score": 9, "version": version},
+    )
+    assert_error(response, 400, "VALIDATION_ERROR")
+
+
+def test_pattern03_missing_version_rejected(client):
+    auth = headers(token_for(client, "an.gv@lms.test"))
+    response = client.put("/courses/c1/grades/u5", headers=auth, json={"score": 9})
+    assert_error(response, 400, "VALIDATION_ERROR")
+
+
+def test_pattern03_existing_database_migrates_without_losing_score(app):
+    from app.database.db import PostgresStore
+
+    store = app.extensions["lms_store"]
+    assert store.set_score("c1", "u5", 8.5, 0) == 1
+    # Simulate the old schema in this test's private schema only.
+    with store._connect() as conn:
+        conn.execute("ALTER TABLE enrollments DROP COLUMN version")
+    migrated = PostgresStore(store.database_url, schema=store.schema)
+    enrollment = migrated.get_enrollment("c1", "u5")
+    assert enrollment.score == 8.5
+    assert enrollment.version == 0
+    assert migrated.set_score("c1", "u5", 9.5, 0) == 1
+
+
 # ==========================================
 # CAU HINH PYTEST
 # ==========================================
@@ -186,7 +304,9 @@ def test_a6_no_password_leak(client):
         login(client, "chi.sv@lms.test"),
         client.get("/me", headers=admin),
         client.get("/courses/c1/grades", headers=admin),
-        client.put("/courses/c1/grades/u4", json={"score": 9}, headers=teacher),
+        client.put(
+            "/courses/c1/grades/u4", json={"score": 9, "version": 0}, headers=teacher
+        ),
     ]
 
     for response in responses:
@@ -211,7 +331,7 @@ def test_a7_student_view_own_grade(client):
 
     assert response.status_code == 200
 
-    assert response.get_json() == [{"studentId": "u4", "score": 7.5}]
+    assert response.get_json() == [{"studentId": "u4", "score": 7.5, "version": 0}]
 
 
 # ==========================================
@@ -235,7 +355,9 @@ def test_a8_student_not_enrolled(client):
 def test_a9_student_cannot_update(client):
     h = headers(token_for(client, "chi.sv@lms.test"))
 
-    response = client.put("/courses/c1/grades/u4", json={"score": 10}, headers=h)
+    response = client.put(
+        "/courses/c1/grades/u4", json={"score": 10, "version": 0}, headers=h
+    )
 
     assert_error(response, 403, "FORBIDDEN")
 
@@ -248,7 +370,9 @@ def test_a9_student_cannot_update(client):
 def test_a10_wrong_teacher(client):
     h = headers(token_for(client, "binh.gv@lms.test"))
 
-    response = client.put("/courses/c1/grades/u4", json={"score": 0}, headers=h)
+    response = client.put(
+        "/courses/c1/grades/u4", json={"score": 0, "version": 0}, headers=h
+    )
 
     assert_error(response, 403, "FORBIDDEN")
 
@@ -261,7 +385,9 @@ def test_a10_wrong_teacher(client):
 def test_a11_admin_cannot_update(client):
     h = headers(token_for(client, "admin@lms.test"))
 
-    response = client.put("/courses/c1/grades/u4", json={"score": 10}, headers=h)
+    response = client.put(
+        "/courses/c1/grades/u4", json={"score": 10, "version": 0}, headers=h
+    )
 
     assert_error(response, 403, "FORBIDDEN")
 
@@ -274,11 +400,11 @@ def test_a11_admin_cannot_update(client):
 @pytest.mark.parametrize(
     "body",
     [
-        {"score": 11},
-        {"score": -1},
-        {"score": "10"},
-        {"score": True},
-        {"score": 9, "courseId": "c2"},
+        {"score": 11, "version": 0},
+        {"score": -1, "version": 0},
+        {"score": "10", "version": 0},
+        {"score": True, "version": 0},
+        {"score": 9, "version": 0, "courseId": "c2"},
     ],
 )
 def test_a12_invalid_score(client, body):
@@ -297,7 +423,9 @@ def test_a12_invalid_score(client, body):
 def test_a13_student_not_enrolled(client):
     h = headers(token_for(client, "an.gv@lms.test"))
 
-    response = client.put("/courses/c1/grades/u6", json={"score": 5}, headers=h)
+    response = client.put(
+        "/courses/c1/grades/u6", json={"score": 5, "version": 0}, headers=h
+    )
 
     assert_error(response, 404, "NOT_FOUND")
 
@@ -312,17 +440,24 @@ def test_a14_update_grade(client):
 
     student = headers(token_for(client, "chi.sv@lms.test"))
 
-    response = client.put("/courses/c1/grades/u4", json={"score": 9}, headers=teacher)
+    response = client.put(
+        "/courses/c1/grades/u4", json={"score": 9, "version": 0}, headers=teacher
+    )
 
     assert response.status_code == 200
 
-    assert response.get_json() == {"courseId": "c1", "studentId": "u4", "score": 9}
+    assert response.get_json() == {
+        "courseId": "c1",
+        "studentId": "u4",
+        "score": 9,
+        "version": 1,
+    }
 
     result = client.get("/courses/c1/grades", headers=student)
 
     assert result.status_code == 200
 
-    assert result.get_json() == [{"studentId": "u4", "score": 9}]
+    assert result.get_json() == [{"studentId": "u4", "score": 9, "version": 1}]
 
 
 # ==========================================
@@ -349,7 +484,9 @@ def test_a15_defense_in_depth(app, client):
     for email, user_id, role in accounts:
         h = headers(token_for(client, email))
 
-        response = client.put("/courses/c1/grades/u4", json={"score": 10}, headers=h)
+        response = client.put(
+            "/courses/c1/grades/u4", json={"score": 10, "version": 0}, headers=h
+        )
 
         assert_error(response, 403, "FORBIDDEN")
 
@@ -444,11 +581,15 @@ def test_a19_audit_log(app, client):
 
     an = headers(token_for(client, "an.gv@lms.test"))
 
-    denied = client.put("/courses/c1/grades/u4", json={"score": 0}, headers=binh)
+    denied = client.put(
+        "/courses/c1/grades/u4", json={"score": 0, "version": 0}, headers=binh
+    )
 
     assert_error(denied, 403, "FORBIDDEN")
 
-    success = client.put("/courses/c1/grades/u4", json={"score": 9}, headers=an)
+    success = client.put(
+        "/courses/c1/grades/u4", json={"score": 9, "version": 0}, headers=an
+    )
 
     assert success.status_code == 200
 
@@ -519,7 +660,7 @@ def test_app_instances_share_postgres_state(tmp_path):
 
     assert store1 is not store2
 
-    store1.set_score("c1", "u4", 2)
+    store1.set_score("c1", "u4", 2, 0)
     assert store2.get_enrollment("c1", "u4").score == 2
     from app.api.store import LoginAttempt
 
@@ -539,34 +680,44 @@ def test_error_checking_order(client):
 
     # 401 truoc 404
     assert_error(
-        client.put("/courses/unknown/grades/u4", json={"score": 11}),
+        client.put("/courses/unknown/grades/u4", json={"score": 11, "version": 0}),
         401,
         "UNAUTHENTICATED",
     )
 
     # 404 mon hoc truoc 403
     assert_error(
-        client.put("/courses/unknown/grades/u4", json={"score": 11}, headers=student),
+        client.put(
+            "/courses/unknown/grades/u4",
+            json={"score": 11, "version": 0},
+            headers=student,
+        ),
         404,
         "NOT_FOUND",
     )
 
     # 403 truoc 400
     assert_error(
-        client.put("/courses/c1/grades/u4", json={"score": 11}, headers=student),
+        client.put(
+            "/courses/c1/grades/u4", json={"score": 11, "version": 0}, headers=student
+        ),
         403,
         "FORBIDDEN",
     )
 
     # 400 truoc 404 ghi danh
     assert_error(
-        client.put("/courses/c1/grades/u6", json={"score": 11}, headers=teacher),
+        client.put(
+            "/courses/c1/grades/u6", json={"score": 11, "version": 0}, headers=teacher
+        ),
         400,
         "VALIDATION_ERROR",
     )
 
     assert_error(
-        client.put("/courses/c1/grades/u6", json={"score": 5}, headers=teacher),
+        client.put(
+            "/courses/c1/grades/u6", json={"score": 5, "version": 0}, headers=teacher
+        ),
         404,
         "NOT_FOUND",
     )
@@ -592,7 +743,7 @@ def test_optional_extensions_work_with_store_backends(tmp_path, backend):
     teacher_token = token_for(client, "an.gv@lms.test")
     grade = client.put(
         "/courses/c1/grades/u4",
-        json={"score": 9},
+        json={"score": 9, "version": 0},
         headers=headers(teacher_token),
     )
     assert grade.status_code == 200
@@ -1850,8 +2001,8 @@ def test_list_enrollments_instructor(tmp_path, backend):
     response = c.get("/courses/c1/enrollments", headers=h)
     assert response.status_code == 200
     assert response.get_json() == [
-        {"studentId": "u4", "score": 7.5},
-        {"studentId": "u5", "score": 8.0},
+        {"studentId": "u4", "score": 7.5, "version": 0},
+        {"studentId": "u5", "score": 8.0, "version": 0},
     ]
 
 
@@ -1886,10 +2037,10 @@ def test_add_enrollment(tmp_path, backend):
     h = headers(token_for(c, "an.gv@lms.test"))
     response = c.post("/courses/c1/enrollments", json={"studentId": "u6"}, headers=h)
     assert response.status_code == 201
-    assert response.get_json() == {"studentId": "u6", "score": 0.0}
+    assert response.get_json() == {"studentId": "u6", "score": 0.0, "version": 0}
 
     listed = c.get("/courses/c1/enrollments", headers=h).get_json()
-    assert {"studentId": "u6", "score": 0.0} in listed
+    assert {"studentId": "u6", "score": 0.0, "version": 0} in listed
 
 
 @pytest.mark.parametrize("backend", ["postgresql"])

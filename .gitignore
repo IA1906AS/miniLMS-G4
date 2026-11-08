@@ -1,6 +1,9 @@
 
 .venv/
 .tmp/
+# Local pattern demo scenarios
+/docs/pattern-03-before.md
+/docs/pattern-03-after.md
 .env
 .env.*
 !.env.example

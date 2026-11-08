@@ -8,8 +8,7 @@ def validate_score_body(data):
     if not isinstance(data, dict):
         raise ValidationError()
 
-    # Chi chap nhan duy nhat field score
-    if set(data.keys()) != {"score"}:
+    if set(data.keys()) != {"score", "version"}:
         raise ValidationError()
 
     score = data["score"]
@@ -23,7 +22,11 @@ def validate_score_body(data):
     if not 0 <= score <= 10:
         raise ValidationError()
 
-    return score
+    version = data["version"]
+    if type(version) is not int or not 0 <= version < 2147483647:
+        raise ValidationError()
+
+    return score, version
 
 
 def validate_register_body(data):

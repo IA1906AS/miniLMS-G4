@@ -43,6 +43,11 @@ class AlreadyEnrolled(APIError):
     error_code = "ALREADY_ENROLLED"
 
 
+class GradeConflict(APIError):
+    status_code = 409
+    error_code = "GRADE_CONFLICT"
+
+
 class AccountLocked(APIError):
     status_code = 429
     error_code = "ACCOUNT_LOCKED"

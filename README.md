@@ -1,5 +1,9 @@
 # miniLMS — Flask và PostgreSQL
 
+## Pattern 03: Optimistic locking khi sửa điểm
+
+Điểm có `version`; yêu cầu lưu từ dữ liệu cũ nhận `409 GRADE_CONFLICT`.
+
 Hệ thống quản lý học tập với ba vai trò `ADMIN`, `INSTRUCTOR`, `STUDENT`.
 PostgreSQL lưu toàn bộ dữ liệu nghiệp vụ, reset token, JWT đã thu hồi,
 khóa tạm tài khoản và rate limiting dùng chung giữa các tiến trình.
@@ -249,7 +253,7 @@ Các API nghiệp vụ yêu cầu `Authorization: Bearer <token>`. Các endpoint
 | GET/POST | `/courses/<cid>/enrollments` | Xem/thêm `studentId` |
 | DELETE | `/courses/<cid>/enrollments/<sid>` | Hủy ghi danh |
 | GET | `/courses/<cid>/grades` | Điểm môn theo quyền |
-| PUT | `/courses/<cid>/grades/<sid>` | GV gửi `{"score":8.5}` |
+| PUT | `/courses/<cid>/grades/<sid>` | GV gửi `{"score":8.5,"version":0}`; phiên bản cũ trả 409 |
 | GET/POST | `/courses/<cid>/materials` | Danh sách/tải multipart `file`, `title` tùy chọn |
 | GET/DELETE | `/courses/<cid>/materials/<mid>/download`, `/courses/<cid>/materials/<mid>` | Tải/xóa tài liệu |
 | GET/POST | `/courses/<cid>/assignments` | Xem/tạo với `title`, `description`, `dueAt` |

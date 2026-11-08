@@ -114,6 +114,7 @@ CREATE TABLE IF NOT EXISTS enrollments (
     course_id TEXT NOT NULL,
     student_id TEXT NOT NULL,
     score DOUBLE PRECISION NOT NULL,
+    version INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (course_id, student_id)
 );
 
@@ -162,6 +163,10 @@ class PostgresStore:
             for statement in _SCHEMA.split(";"):
                 if statement.strip():
                     conn.execute(statement)
+            conn.execute(
+                "ALTER TABLE enrollments ADD COLUMN IF NOT EXISTS "
+                "version INTEGER NOT NULL DEFAULT 0"
+            )
             for column in (
                 "token_version",
                 "full_name",
@@ -602,22 +607,27 @@ class PostgresStore:
         course_id: str,
         student_id: str,
         score: float,
-    ) -> None:
+        expected_version: int,
+    ) -> int | None:
 
         with self._connect() as conn:
-            conn.execute(
+            row = conn.execute(
                 """
                 UPDATE enrollments
-                SET score = %s
+                SET score = %s, version = version + 1
                 WHERE course_id = %s
                 AND student_id = %s
+                AND version = %s
+                RETURNING version
                 """,
                 (
                     score,
                     course_id,
                     student_id,
+                    expected_version,
                 ),
-            )
+            ).fetchone()
+        return row["version"] if row else None
 
     # ========================================================
     # COURSE CRUD
@@ -1142,6 +1152,7 @@ def _enrollment(row: dict[str, Any]) -> Enrollment:
         course_id=row["course_id"],
         student_id=row["student_id"],
         score=row["score"],
+        version=row["version"],
     )
 
 

@@ -237,7 +237,7 @@ def create_app(config=None):
     @require_role("INSTRUCTOR")
     def edit_grade(course_id, student_id):
         data = request.get_json(silent=True)
-        score = validate_score_body(data)
+        score, version = validate_score_body(data)
 
         enrollment = store.get_enrollment(
             course_id,
@@ -251,6 +251,7 @@ def create_app(config=None):
             course_id,
             student_id,
             score,
+            version=version,
             store=store,
         )
 

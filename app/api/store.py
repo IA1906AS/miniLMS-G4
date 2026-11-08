@@ -31,6 +31,7 @@ class Enrollment:
     course_id: str
     student_id: str
     score: float
+    version: int = 0
 
 
 @dataclass

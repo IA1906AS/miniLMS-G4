@@ -5,6 +5,7 @@ import psycopg
 from app.api.errors import (
     AlreadyEnrolled,
     Forbidden,
+    GradeConflict,
     NotFound,
     ValidationError,
 )
@@ -94,13 +95,14 @@ def get_grades(actor, course_id, *, store=None):
             if isinstance(item, dict)
             else item.student_id,
             "score": item["score"] if isinstance(item, dict) else item.score,
+            "version": item["version"] if isinstance(item, dict) else item.version,
         }
         for item in allowed
     ]
 
 
 # CAP NHAT DIEM
-def update_grade(actor, course_id, student_id, score, *, store=None):
+def update_grade(actor, course_id, student_id, score, *, version=None, store=None):
     store = _resolve_store(store)
 
     course = _get_course(store, course_id)
@@ -129,12 +131,17 @@ def update_grade(actor, course_id, student_id, score, *, store=None):
     enrollment = store.get_enrollment(course_id, student_id)
     if enrollment is None:
         raise NotFound()
-    store.set_score(course_id, student_id, score)
+    if type(version) is not int or not 0 <= version < 2147483647:
+        raise ValidationError()
+    new_version = store.set_score(course_id, student_id, score, version)
+    if new_version is None:
+        raise GradeConflict()
 
     return {
         "courseId": course_id,
         "studentId": student_id,
         "score": score,
+        "version": new_version,
     }
 
 
@@ -185,11 +192,13 @@ def _enrollment_to_dict(item):
         return {
             "studentId": item["studentId"],
             "score": item["score"],
+            "version": item["version"],
         }
 
     return {
         "studentId": item.student_id,
         "score": item.score,
+        "version": item.version,
     }
 
 

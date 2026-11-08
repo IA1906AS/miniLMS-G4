@@ -621,7 +621,10 @@ async function loadGrades() {
 // QUẢN LÝ ĐIỂM (GIẢNG VIÊN)
 // ==========================================
 
+let gradeEditorRequest = 0;
+
 async function loadEnrollmentsIntoEditor(courseId) {
+    const requestId = ++gradeEditorRequest;
     const studentSelect = $('edit-student');
 
     if (!studentSelect) return;
@@ -638,6 +641,8 @@ async function loadEnrollmentsIntoEditor(courseId) {
             { auth: true }
         );
 
+        if (requestId !== gradeEditorRequest || $('edit-course').value !== courseId) return;
+
         if (!Array.isArray(enrollments)) {
             return;
         }
@@ -650,14 +655,11 @@ async function loadEnrollmentsIntoEditor(courseId) {
         for (const item of enrollments) {
             const option = document.createElement('option');
             option.value = item.studentId;
+            option.dataset.version = String(item.version);
             option.textContent = item.studentId + ' — điểm ' + item.score;
             studentSelect.appendChild(option);
         }
 
-        const msg = $('edit-grade-msg');
-        if (msg) {
-            msg.className = 'msg';
-        }
     } catch (error) {
         flash(
             $('edit-grade-msg'),
@@ -719,6 +721,7 @@ async function initGradeEditor(role, userId) {
 
     courseSelect.addEventListener('change', function () {
         scoreInput.value = '';
+        flash($('edit-grade-msg'), '');
         loadEnrollmentsIntoEditor(courseSelect.value);
     });
 
@@ -726,8 +729,9 @@ async function initGradeEditor(role, userId) {
         const courseId = courseSelect.value;
         const studentId = studentSelect.value;
         const raw = scoreInput.value;
+        const version = Number(studentSelect.selectedOptions[0]?.dataset.version);
 
-        if (!courseId || !studentId || raw === '') {
+        if (!courseId || !studentId || raw === '' || !Number.isInteger(version)) {
             flash(
                 $('edit-grade-msg'),
                 'Vui lòng chọn môn, sinh viên và nhập điểm.',
@@ -748,6 +752,9 @@ async function initGradeEditor(role, userId) {
         }
 
         button.disabled = true;
+        courseSelect.disabled = true;
+        studentSelect.disabled = true;
+        scoreInput.disabled = true;
 
         try {
             await api(
@@ -758,7 +765,7 @@ async function initGradeEditor(role, userId) {
                 {
                     method: 'PUT',
                     auth: true,
-                    body: { score: score }
+                    body: { score: score, version: version }
                 }
             );
 
@@ -768,6 +775,22 @@ async function initGradeEditor(role, userId) {
             await loadGrades();
             await loadEnrollmentsIntoEditor(courseId);
         } catch (error) {
+            if (error.message === 'GRADE_CONFLICT') {
+                studentSelect.replaceChildren();
+                scoreInput.value = '';
+                try {
+                    await loadGrades();
+                    await loadEnrollmentsIntoEditor(courseId);
+                } catch (_) {
+                    // The conflict message below remains visible even if refresh fails.
+                }
+                flash(
+                    $('edit-grade-msg'),
+                    'Điểm đã được cập nhật ở phiên khác. Điểm bạn nhập chưa được lưu. Vui lòng chọn lại sinh viên, kiểm tra điểm mới rồi nhập lại.',
+                    false
+                );
+                return;
+            }
             flash(
                 $('edit-grade-msg'),
                 translate(error.message),
@@ -775,6 +798,9 @@ async function initGradeEditor(role, userId) {
             );
         } finally {
             button.disabled = false;
+            courseSelect.disabled = false;
+            studentSelect.disabled = false;
+            scoreInput.disabled = false;
         }
     });
 }
