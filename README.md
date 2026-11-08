@@ -253,7 +253,7 @@ Các API nghiệp vụ yêu cầu `Authorization: Bearer <token>`. Các endpoint
 | GET/POST | `/courses/<cid>/materials` | Danh sách/tải multipart `file`, `title` tùy chọn |
 | GET/DELETE | `/courses/<cid>/materials/<mid>/download`, `/courses/<cid>/materials/<mid>` | Tải/xóa tài liệu |
 | GET/POST | `/courses/<cid>/assignments` | Xem/tạo với `title`, `description`, `dueAt` |
-| GET/POST | `/courses/<cid>/assignments/<aid>/submissions` | Xem theo quyền/nộp multipart `file` |
+| GET/POST | `/courses/<cid>/assignments/<aid>/submissions` | Xem theo quyền/nộp multipart `file`; POST bắt buộc header UUID `Idempotency-Key` |
 | GET | `/courses/<cid>/submissions/<sid>/download` | Tải bài nộp |
 | PUT | `/courses/<cid>/submissions/<sid>/grade` | GV gửi `score`, `feedback` |
 | GET/POST | `/courses/<cid>/quizzes` | Xem/tạo trắc nghiệm |

@@ -16,6 +16,12 @@ from app.api.assessment_store import assessment_records
 from app.api.audit import write_audit
 from app.api.errors import APIError, Forbidden, NotFound, ValidationError
 from app.api.guards import require_role
+from app.api.idempotency import (
+    find_response,
+    save_response,
+    submission_hash,
+    submission_key,
+)
 from app.api.learning import MAX_DOCUMENT_BYTES, _authorize, _validate_document
 
 bp = Blueprint("assessments", __name__)
@@ -167,39 +173,69 @@ def remove_submission_files(names):
 @require_role("STUDENT")
 def submit_assignment(course_id, assignment_id):
     _authorize(course_id)
+
+    # Mã đại diện cho thao tác nộp bài.
+    key = submission_key()
+
+    # Giữ nguyên các kiểm tra file.
     request.max_content_length = MAX_DOCUMENT_BYTES + 64 * 1024
     if set(request.files) != {"file"} or len(request.files.getlist("file")) != 1:
         raise ValidationError()
+
     upload = request.files["file"]
     filename = (upload.filename or "").replace("\\", "/").rsplit("/", 1)[-1]
     if not filename or len(filename) > 200 or any(ord(char) < 32 for char in filename):
         raise ValidationError()
+
     content = upload.read(MAX_DOCUMENT_BYTES + 1)
     if len(content) > MAX_DOCUMENT_BYTES:
         raise RequestEntityTooLarge()
     if not content:
         raise ValidationError()
+
     if Path(filename).suffix.lower() == ".zip":
         if not zipfile.is_zipfile(io.BytesIO(content)):
             raise ValidationError()
     else:
         _validate_document(filename, content)
-    storage_name = secrets.token_hex(16)
-    path = _file_path(storage_name)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("xb") as file:
-        file.write(content)
+
+    # Hash để phát hiện cùng key nhưng khác dữ liệu.
+    request_hash = submission_hash(course_id, assignment_id, filename, content)
+    scope = (g.actor["id"], course_id, assignment_id, key)
+
+    path = None
     previous = None
+
     try:
         with _records(course_id) as records:
             assignment = records.get("assignments", assignment_id)
+
+            # Nếu đã xử lý thao tác này thì trả kết quả cũ.
+            saved = find_response(records.connection, scope, request_hash)
+            if saved is not None:
+                response = jsonify(saved["response_body"])
+                response.status_code = saved["response_status"]
+                response.headers["Idempotency-Replayed"] = "true"
+                return response
+
+            # Chỉ thao tác mới mới cần kiểm tra hạn và ghi bài.
             if time.time() >= assignment["deadline"]:
                 raise AssessmentConflict("ASSIGNMENT_CLOSED")
+
             existing = records.list(
-                "submissions", parent_id=assignment_id, student_id=g.actor["id"]
+                "submissions",
+                parent_id=assignment_id,
+                student_id=g.actor["id"],
             )
             if existing:
                 previous = existing[0]["storageName"]
+
+            storage_name = secrets.token_hex(16)
+            path = _file_path(storage_name)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("xb") as file:
+                file.write(content)
+
             item = _new(
                 course_id,
                 parentId=assignment_id,
@@ -213,14 +249,24 @@ def submit_assignment(course_id, assignment_id):
             )
             if existing:
                 item["id"] = existing[0]["id"]
+
+            # Bài nộp và kết quả idempotency dùng cùng transaction.
             records.save("submissions", item)
+            result = _submission_public(item)
+            save_response(records.connection, scope, request_hash, result)
+
     except Exception:
-        path.unlink(missing_ok=True)
+        # Nếu xử lý thất bại, dọn file vừa tạo.
+        if path is not None:
+            path.unlink(missing_ok=True)
         raise
+
+    # Chỉ xóa file cũ sau khi transaction thành công.
     if previous:
         remove_submission_files([previous])
+
     _audit("SUBMIT_ASSIGNMENT")
-    return jsonify(_submission_public(item)), 201
+    return jsonify(result), 201
 
 
 @bp.get("/courses/<course_id>/assignments/<assignment_id>/submissions")

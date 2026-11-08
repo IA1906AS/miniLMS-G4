@@ -133,6 +133,18 @@ CREATE TABLE IF NOT EXISTS reset_tokens (
     user_id TEXT NOT NULL,
     expires_at DOUBLE PRECISION NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS submission_idempotency (
+    student_id TEXT NOT NULL,
+    course_id TEXT NOT NULL,
+    assignment_id TEXT NOT NULL,
+    idempotency_key TEXT NOT NULL,
+    request_hash TEXT NOT NULL,
+    response_status INTEGER NOT NULL,
+    response_body JSONB NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (student_id, course_id, assignment_id, idempotency_key)
+);
 """
 
 
@@ -691,6 +703,10 @@ class PostgresStore:
         with self._connect() as conn:
             conn.execute(
                 "SELECT id FROM courses WHERE id = %s FOR UPDATE", (course_id,)
+            )
+            conn.execute(
+                "DELETE FROM submission_idempotency WHERE course_id = %s",
+                (course_id,),
             )
             for table in ("assignments", "submissions", "quizzes", "quiz_attempts"):
                 conn.execute(f"DELETE FROM {table} WHERE course_id = %s", (course_id,))

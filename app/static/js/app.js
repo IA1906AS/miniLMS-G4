@@ -31,10 +31,12 @@ function flash(element, message, ok = true) {
 async function api(path, {
     method = 'GET',
     body,
-    auth = false
+    auth = false,
+    headers: extraHeaders = {}
 } = {}) {
     const headers = {
-        'Accept': 'application/json'
+        'Accept': 'application/json',
+        ...extraHeaders
     };
 
     const multipart = body instanceof FormData;
@@ -92,6 +94,12 @@ async function api(path, {
 
 function translate(code) {
     const messages = {
+        IDEMPOTENCY_KEY_REQUIRED:
+            'Yêu cầu nộp bài thiếu mã thao tác.',
+        INVALID_IDEMPOTENCY_KEY:
+            'Mã thao tác nộp bài không hợp lệ.',
+        IDEMPOTENCY_KEY_REUSED:
+            'Mã thao tác đã dùng cho dữ liệu khác. Hãy chọn lại file để nộp bản mới.',
         INVALID_CREDENTIALS:
             'Email hoặc mật khẩu không đúng.',
 
