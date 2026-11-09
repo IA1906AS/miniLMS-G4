@@ -2,6 +2,7 @@ import math
 
 import psycopg
 
+from app.api.audit import make_audit_record, write_audit_file
 from app.api.errors import (
     AlreadyEnrolled,
     Forbidden,
@@ -133,9 +134,19 @@ def update_grade(actor, course_id, student_id, score, *, version=None, store=Non
         raise NotFound()
     if type(version) is not int or not 0 <= version < 2147483647:
         raise ValidationError()
-    new_version = store.set_score(course_id, student_id, score, version)
+    audit_record = make_audit_record(
+        user_id,
+        "UPDATE_GRADE",
+        f"/courses/{course_id}/grades/{student_id}",
+        "SUCCESS",
+        new_score=score,
+    )
+    new_version = store.set_score(
+        course_id, student_id, score, version, audit_record=audit_record
+    )
     if new_version is None:
         raise GradeConflict()
+    write_audit_file(audit_record)
 
     return {
         "courseId": course_id,

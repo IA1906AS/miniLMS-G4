@@ -70,3 +70,40 @@ def test_non_grade_denial_is_not_recorded_as_grade_change(client):
     )
     denied = client.get("/admin/api/audit?action=PUT_ACCESS_DENIED", headers=admin)
     assert denied.json["total"] == 1
+
+
+def test_file_audit_failure_does_not_fail_committed_grade(client, tmp_path, caplog):
+    teacher = auth(client, "an.gv@lms.test")
+    client.application.config["AUDIT_LOG_PATH"] = str(tmp_path)
+    result = client.put(
+        "/courses/c1/grades/u4", headers=teacher, json={"score": 9.5, "version": 0}
+    )
+    assert result.status_code == 200
+    assert result.json["version"] == 1
+    store = client.application.extensions["lms_store"]
+    assert store.get_enrollment("c1", "u4").score == 9.5
+    rows, total = store.list_audit("UPDATE_GRADE", "u2", 1)
+    assert total == 1
+    assert rows[0]["details"] == {"oldScore": 7.5, "newScore": 9.5}
+    assert "Unable to write audit file" in caplog.text
+
+
+def test_database_audit_failure_rolls_back_grade_and_version(client, monkeypatch):
+    teacher = auth(client, "an.gv@lms.test")
+    store = client.application.extensions["lms_store"]
+    original = store.record_audit
+
+    def fail_grade_audit(record, **kwargs):
+        if record["action"] == "UPDATE_GRADE":
+            raise RuntimeError("Simulated audit database failure")
+        return original(record, **kwargs)
+
+    monkeypatch.setattr(store, "record_audit", fail_grade_audit)
+    result = client.put(
+        "/courses/c1/grades/u4", headers=teacher, json={"score": 9.5, "version": 0}
+    )
+    assert result.status_code == 500
+    enrollment = store.get_enrollment("c1", "u4")
+    assert enrollment.score == 7.5
+    assert enrollment.version == 0
+    assert store.list_audit("UPDATE_GRADE", "u2", 1)[1] == 0

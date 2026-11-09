@@ -239,13 +239,6 @@ def create_app(config=None):
         data = request.get_json(silent=True)
         score, version = validate_score_body(data)
 
-        enrollment = store.get_enrollment(
-            course_id,
-            student_id,
-        )
-
-        old_score = enrollment.score if enrollment is not None else None
-
         result = update_grade(
             g.actor,
             course_id,
@@ -253,15 +246,6 @@ def create_app(config=None):
             score,
             version=version,
             store=store,
-        )
-
-        write_audit(
-            actor_id=g.actor["id"],
-            action="UPDATE_GRADE",
-            resource=f"/courses/{course_id}/grades/{student_id}",
-            result="SUCCESS",
-            old_score=old_score,
-            new_score=result["score"],
         )
 
         return jsonify(result), 200

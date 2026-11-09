@@ -54,6 +54,16 @@ Thay khóa JWT và thông tin đăng nhập trước khi triển khai thực t�
 
 ## Đổi mật khẩu và email khôi phục
 
+Reset thành công thu hồi toàn bộ liên kết reset cũ của tài khoản và vô hiệu hóa
+JWT cũ. Các yêu cầu reset đồng thời được xử lý theo khóa trên người dùng để chỉ
+một liên kết cũ có thể thành công. Mật khẩu, việc thu hồi liên kết và audit database
+được lưu trong cùng giao dịch; lỗi sẽ rollback toàn bộ.
+
+Cập nhật điểm vẫn kiểm tra `version` và trả `409 GRADE_CONFLICT` khi dữ liệu đã cũ.
+Điểm, phiên bản mới và audit database được commit cùng giao dịch. File audit là
+bản sao bổ sung: nếu không ghi được file, server ghi cảnh báo và vẫn trả thành công
+cho thao tác đã được lưu bền vững trong PostgreSQL.
+
 Chế độ thử cục bộ: đặt `SMTP_ENABLED=0`, `LOCAL_EMAIL_ENABLED=1` trong `.env`
 và chạy `uv run flask --app app run --debug`. Thư reset nằm trong
 `instance/mailbox/reset-*.txt`: mở file và dùng liên kết để đặt mật khẩu mới.

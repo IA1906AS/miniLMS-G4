@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import re
 import time
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from typing import Any
 
@@ -493,19 +493,19 @@ class PostgresStore:
         self,
         token_hash: str,
         password_hash: str,
+        *,
+        audit_record=None,
     ) -> str | None:
-        """Atomically reset password and consume reset token."""
+        """Reset password and revoke all reset links, serializing on the user."""
 
         with self._connect() as conn:
-            # Lock the token row until password update and token deletion commit.
-
+            # Discover the user first so different tokens share the same lock order.
             row = conn.execute(
                 """
                 SELECT user_id
                 FROM reset_tokens
                 WHERE token = %s
                   AND expires_at > %s
-                FOR UPDATE
                 """,
                 (token_hash, time.time()),
             ).fetchone()
@@ -514,6 +514,19 @@ class PostgresStore:
                 return None
 
             user_id = str(row["user_id"])
+
+            user = conn.execute(
+                "SELECT id FROM users WHERE id = %s FOR UPDATE", (user_id,)
+            ).fetchone()
+            if user is None:
+                raise ValueError("Reset token references missing user")
+            # Another reset may have revoked the links while we waited for the user.
+            valid = conn.execute(
+                "SELECT token FROM reset_tokens WHERE token = %s AND user_id = %s AND expires_at > %s FOR UPDATE",
+                (token_hash, user_id, time.time()),
+            ).fetchone()
+            if valid is None:
+                return None
 
             cursor = conn.execute(
                 """
@@ -529,12 +542,18 @@ class PostgresStore:
                 raise ValueError("Reset token references missing user")
 
             cursor = conn.execute(
-                "DELETE FROM reset_tokens WHERE token = %s",
-                (token_hash,),
+                "DELETE FROM reset_tokens WHERE user_id = %s",
+                (user_id,),
             )
 
-            if cursor.rowcount != 1:
+            if cursor.rowcount < 1:
                 raise RuntimeError("Failed to consume reset token")
+
+            if audit_record is not None:
+                audit_record.update(
+                    actorId=user_id, resource=f"users/{user_id}/password"
+                )
+                self.record_audit(audit_record, connection=conn)
 
             return user_id
 
@@ -608,9 +627,17 @@ class PostgresStore:
         student_id: str,
         score: float,
         expected_version: int,
+        *,
+        audit_record=None,
     ) -> int | None:
 
         with self._connect() as conn:
+            previous = conn.execute(
+                "SELECT score FROM enrollments WHERE course_id = %s AND student_id = %s FOR UPDATE",
+                (course_id, student_id),
+            ).fetchone()
+            if previous is None:
+                return None
             row = conn.execute(
                 """
                 UPDATE enrollments
@@ -627,6 +654,9 @@ class PostgresStore:
                     expected_version,
                 ),
             ).fetchone()
+            if row is not None and audit_record is not None:
+                audit_record["oldScore"] = previous["score"]
+                self.record_audit(audit_record, connection=conn)
         return row["version"] if row else None
 
     # ========================================================
@@ -718,10 +748,11 @@ class PostgresStore:
                 (course_id,),
             )
 
-    def record_audit(self, record):
+    def record_audit(self, record, *, connection=None):
         from psycopg.types.json import Jsonb
 
-        with self._connect() as conn:
+        context = self._connect() if connection is None else nullcontext(connection)
+        with context as conn:
             conn.execute(
                 "INSERT INTO audit_events (created_at, actor_id, action, resource, result, details) VALUES (%s,%s,%s,%s,%s,%s)",
                 (

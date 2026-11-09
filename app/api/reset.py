@@ -28,7 +28,7 @@ from flask import (
     request,
 )
 
-from app.api.audit import write_audit
+from app.api.audit import make_audit_record, write_audit, write_audit_file
 from app.api.auth import hash_password
 from app.api.errors import InvalidCredentials, ValidationError
 from app.api.local_mail import send_reset_email
@@ -263,20 +263,19 @@ def reset_password() -> Response | tuple[Response, int]:
     )
 
     # STEP 4: ATOMIC PASSWORD RESET
+    audit_record = make_audit_record(
+        None, "RESET_PASSWORD", "/auth/reset-password", "SUCCESS"
+    )
     user_id = store.reset_password_atomic(
         token_hash,
         password_hash,
+        audit_record=audit_record,
     )
 
     if user_id is None:
         raise ValidationError("token không hợp lệ hoặc đã hết hạn")
 
     # STEP 5: AUDIT LOG
-    write_audit(
-        actor_id=user_id,
-        action="RESET_PASSWORD",
-        resource=f"users/{user_id}/password",
-        result="SUCCESS",
-    )
+    write_audit_file(audit_record)
 
     return jsonify({"status": "password-updated"})
