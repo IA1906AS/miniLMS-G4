@@ -5,6 +5,7 @@ const studyBase = '/courses/' + encodeURIComponent(studyCourseId || '');
 let studyUser;
 let studyAssignments = [];
 let currentAssignment = null;
+let pendingSubmission = null;
 let assignmentRequest = 0;
 let currentQuiz = null;
 let quizRequest = 0;
@@ -322,18 +323,62 @@ async function initStudy() {
         });
         studyForm($('submission-upload'), $('assignment-detail-msg'), async () => {
             if (!currentAssignment) return;
+
             const id = currentAssignment.id;
             const file = $('submission-file').files[0];
+
             if (!file) return;
-            if (file.size > 10 * 1024 * 1024) throw new Error('Bài nộp vượt quá 10 MB.');
-            const body = new FormData(); body.append('file', file);
-            await api(studyBase + '/assignments/' + encodeURIComponent(id) + '/submissions', {
-                method: 'POST', auth: true, body
-            });
+            if (file.size > 10 * 1024 * 1024) {
+                throw new Error('Bài nộp vượt quá 10 MB.');
+            }
+
+            // Tạo key cho thao tác mới.
+            if (!pendingSubmission ||
+                pendingSubmission.assignmentId !== id ||
+                pendingSubmission.file !== file) {
+                pendingSubmission = {
+                    assignmentId: id,
+                    file,
+                    key: crypto.randomUUID()
+                };
+            }
+
+            const body = new FormData();
+            body.append('file', file);
+
+            try {
+                await api(
+                    studyBase + '/assignments/' + encodeURIComponent(id) + '/submissions',
+                    {
+                        method: 'POST',
+                        auth: true,
+                        body,
+                        headers: {
+                            'Idempotency-Key': pendingSubmission.key
+                        }
+                    }
+                );
+            } catch (error) {
+                // Giữ key nếu lỗi mạng hoặc server trả 5xx.
+                if (error.status && error.status < 500) {
+                    pendingSubmission = null;
+                }
+                throw error;
+            }
+
+            // Nhận được xác nhận thành công thì kết thúc thao tác.
+            pendingSubmission = null;
+
             $('submission-file').value = '';
-            if (currentAssignment?.id === id) await selectAssignment(id);
-            await loadAssessmentResults(); flash($('assignment-detail-msg'), 'Đã nộp bài.');
+
+            if (currentAssignment?.id === id) {
+                await selectAssignment(id);
+            }
+
+            await loadAssessmentResults();
+            flash($('assignment-detail-msg'), 'Đã nộp bài.');
         });
+
         studyForm($('quiz-create'), $('quiz-create-msg'), async () => {
             const questions = [...$('quiz-question-editor').children].map(field => ({
                 prompt: field.querySelector('.question-prompt').value,

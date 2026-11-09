@@ -1,4 +1,5 @@
 import io
+import uuid
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -66,7 +67,7 @@ def test_dashboard_pending_and_grading_counts(client):
     assert (
         client.post(
             f"/courses/c1/assignments/{assignment}/submissions",
-            headers=student,
+            headers={**student, "Idempotency-Key": str(uuid.uuid4())},
             data={"file": (io.BytesIO(b"Homework"), "work.txt")},
         ).status_code
         == 201

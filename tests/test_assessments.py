@@ -1,6 +1,7 @@
 import io
 import json
 import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import Path
@@ -47,10 +48,12 @@ def assignment(client, teacher, course="c1"):
     return response.json
 
 
-def submit_file(client, student, assignment_id, course="c1", content=b"Bai lam"):
+def submit_file(
+    client, student, assignment_id, course="c1", content=b"Bai lam", *, key=None
+):
     return client.post(
         f"/courses/{course}/assignments/{assignment_id}/submissions",
-        headers=student,
+        headers={**student, "Idempotency-Key": key or str(uuid.uuid4())},
         data={"file": (io.BytesIO(content), "../../report.txt")},
     )
 
@@ -154,7 +157,7 @@ def test_deadline_and_invalid_submission_cleanup(assessment_app, monkeypatch):
     monkeypatch.setattr("app.api.assessments.time.time", lambda: deadline)
     result = submit_file(client, student, item["id"])
     assert result.status_code == 409 and result.json["error"] == "ASSIGNMENT_CLOSED"
-    assert not list(Path(assessment_app.config["SUBMISSION_UPLOAD_DIR"]).iterdir())
+    assert not list(Path(assessment_app.config["SUBMISSION_UPLOAD_DIR"]).glob("*"))
     path = f"/courses/c1/assignments/{item['id']}/submissions"
     assert client.get(path, headers=student).json == []
     assert submit_file(client, student, "missing").status_code == 404
@@ -459,3 +462,275 @@ def test_anonymous_endpoints_and_study_template(assessment_app):
     assert (
         b'id="quiz-answer-form"' in page.data and b'id="submission-upload"' in page.data
     )
+
+
+def test_idempotency_replay_preserves_graded_submission(assessment_app):
+    client = assessment_app.test_client()
+    teacher = auth(client, "an.gv@lms.test")
+    student = auth(client, "chi.sv@lms.test")
+    task = assignment(client, teacher)
+    key = str(uuid.uuid4())
+    first = submit_file(client, student, task["id"], key=key)
+    assert first.status_code == 201
+    directory = Path(assessment_app.config["SUBMISSION_UPLOAD_DIR"])
+    stored_files = set(directory.iterdir())
+    grade_url = f"/courses/c1/submissions/{first.json['id']}/grade"
+    assert (
+        client.put(
+            grade_url, headers=teacher, json={"score": 8.5, "feedback": "Da cham"}
+        ).status_code
+        == 200
+    )
+    grading_before = client.get("/api/dashboard", headers=teacher).json["counts"][
+        "grading"
+    ]
+
+    replay = submit_file(client, student, task["id"], key=key)
+    assert replay.status_code == 201
+    rows = client.get(
+        f"/courses/c1/assignments/{task['id']}/submissions", headers=teacher
+    ).json
+    assert len(rows) == 1
+    assert rows[0]["score"] == 8.5
+    assert rows[0]["feedback"] == "Da cham"
+    assert rows[0]["submittedAt"] == first.json["submittedAt"]
+    assert set(directory.iterdir()) == stored_files
+    assert replay.json == first.json
+    assert replay.headers["Idempotency-Replayed"] == "true"
+    assert (
+        client.get("/api/dashboard", headers=teacher).json["counts"]["grading"]
+        == grading_before
+    )
+    with assessment_app.extensions["lms_store"]._connect() as conn:
+        assert (
+            conn.execute("SELECT count(*) AS n FROM submission_idempotency").fetchone()[
+                "n"
+            ]
+            == 1
+        )
+        assert (
+            conn.execute(
+                "SELECT count(*) AS n FROM audit_events WHERE action = 'SUBMIT_ASSIGNMENT'"
+            ).fetchone()["n"]
+            == 1
+        )
+
+
+@pytest.mark.parametrize("key", [None, "bad-key", "x" * 37])
+def test_idempotency_requires_valid_key(assessment_app, key):
+    client = assessment_app.test_client()
+    teacher = auth(client, "an.gv@lms.test")
+    student = auth(client, "chi.sv@lms.test")
+    task = assignment(client, teacher)
+    headers = student if key is None else {**student, "Idempotency-Key": key}
+    response = client.post(
+        f"/courses/c1/assignments/{task['id']}/submissions",
+        headers=headers,
+        data={"file": (io.BytesIO(b"Report"), "report.txt")},
+    )
+    assert response.status_code == 400
+    assert response.json["error"] == (
+        "IDEMPOTENCY_KEY_REQUIRED" if key is None else "INVALID_IDEMPOTENCY_KEY"
+    )
+    assert not list(Path(assessment_app.config["SUBMISSION_UPLOAD_DIR"]).glob("*"))
+    with assessment_app.extensions["lms_store"]._connect() as conn:
+        assert (
+            conn.execute("SELECT count(*) AS n FROM submissions").fetchone()["n"] == 0
+        )
+        assert (
+            conn.execute("SELECT count(*) AS n FROM submission_idempotency").fetchone()[
+                "n"
+            ]
+            == 0
+        )
+
+
+@pytest.mark.parametrize(
+    "filename,content", [("report.txt", b"Changed"), ("other.txt", b"Bai lam")]
+)
+def test_idempotency_rejects_changed_payload(assessment_app, filename, content):
+    client = assessment_app.test_client()
+    teacher = auth(client, "an.gv@lms.test")
+    student = auth(client, "chi.sv@lms.test")
+    task = assignment(client, teacher)
+    key = str(uuid.uuid4())
+    original = submit_file(client, student, task["id"], key=key)
+    directory = Path(assessment_app.config["SUBMISSION_UPLOAD_DIR"])
+    stored_files = set(directory.iterdir())
+    response = client.post(
+        f"/courses/c1/assignments/{task['id']}/submissions",
+        headers={**student, "Idempotency-Key": key},
+        data={"file": (io.BytesIO(content), filename)},
+    )
+    assert response.status_code == 409
+    assert response.json == {"error": "IDEMPOTENCY_KEY_REUSED"}
+    assert set(directory.iterdir()) == stored_files
+    assert client.get(original.json["downloadUrl"], headers=student).data == b"Bai lam"
+
+
+def test_idempotency_concurrent_replay(assessment_app):
+    client = assessment_app.test_client()
+    teacher = auth(client, "an.gv@lms.test")
+    student = auth(client, "chi.sv@lms.test")
+    task = assignment(client, teacher)
+    key = str(uuid.uuid4())
+    barrier = Barrier(2)
+
+    def parallel_submit(_):
+        with assessment_app.test_client() as parallel:
+            barrier.wait(timeout=10)
+            return submit_file(parallel, student, task["id"], key=key)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        responses = list(pool.map(parallel_submit, range(2)))
+    assert [response.status_code for response in responses] == [201, 201]
+    assert responses[0].json == responses[1].json
+    assert (
+        sum(
+            response.headers.get("Idempotency-Replayed") == "true"
+            for response in responses
+        )
+        == 1
+    )
+    assert (
+        len(list(Path(assessment_app.config["SUBMISSION_UPLOAD_DIR"]).iterdir())) == 1
+    )
+    with assessment_app.extensions["lms_store"]._connect() as conn:
+        assert (
+            conn.execute("SELECT count(*) AS n FROM submissions").fetchone()["n"] == 1
+        )
+        assert (
+            conn.execute("SELECT count(*) AS n FROM submission_idempotency").fetchone()[
+                "n"
+            ]
+            == 1
+        )
+
+
+def test_idempotency_replay_after_deadline_and_app_restart(assessment_app, monkeypatch):
+    client = assessment_app.test_client()
+    teacher = auth(client, "an.gv@lms.test")
+    student = auth(client, "chi.sv@lms.test")
+    task = assignment(client, teacher)
+    key = str(uuid.uuid4())
+    first = submit_file(client, student, task["id"], key=key)
+    restarted = create_app(dict(assessment_app.config)).test_client()
+    deadline = datetime.fromisoformat(task["dueAt"]).timestamp()
+    monkeypatch.setattr("app.api.assessments.time.time", lambda: deadline + 1)
+    replay = submit_file(restarted, student, task["id"], key=key)
+    assert replay.status_code == 201 and replay.json == first.json
+    assert replay.headers["Idempotency-Replayed"] == "true"
+    new_request = submit_file(restarted, student, task["id"])
+    assert new_request.status_code == 409
+    assert new_request.json["error"] == "ASSIGNMENT_CLOSED"
+
+
+def test_idempotency_scope_and_current_permissions(assessment_app):
+    client = assessment_app.test_client()
+    teacher = auth(client, "an.gv@lms.test")
+    student = auth(client, "chi.sv@lms.test")
+    peer = auth(client, "dung.sv@lms.test")
+    admin = auth(client, "admin@lms.test")
+    task = assignment(client, teacher)
+    key = str(uuid.uuid4())
+    first = submit_file(client, student, task["id"], key=key)
+    second = submit_file(client, peer, task["id"], key=key)
+    assert first.status_code == second.status_code == 201
+    assert first.json["studentId"] != second.json["studentId"]
+    assert "Idempotency-Replayed" not in second.headers
+    other_task = assignment(client, teacher)
+    assert submit_file(client, student, other_task["id"], key=key).status_code == 201
+    assert (
+        client.delete("/courses/c1/enrollments/u4", headers=teacher).status_code == 200
+    )
+    assert submit_file(client, student, task["id"], key=key).status_code == 403
+    assert (
+        client.put(
+            "/admin/api/users/u5", headers=admin, json={"isLocked": True}
+        ).status_code
+        == 200
+    )
+    assert submit_file(client, peer, task["id"], key=key).status_code == 401
+
+
+def test_idempotency_key_failure_rolls_back_replacement(assessment_app, monkeypatch):
+    client = assessment_app.test_client()
+    teacher = auth(client, "an.gv@lms.test")
+    student = auth(client, "chi.sv@lms.test")
+    task = assignment(client, teacher)
+    first = submit_file(client, student, task["id"])
+    directory = Path(assessment_app.config["SUBMISSION_UPLOAD_DIR"])
+    stored_files = set(directory.iterdir())
+    key = str(uuid.uuid4())
+
+    def broken_save(*args, **kwargs):
+        raise RuntimeError("DEMO: key storage failure")
+
+    with monkeypatch.context() as patch:
+        patch.setattr("app.api.assessments.save_response", broken_save)
+        failed = submit_file(
+            client, student, task["id"], key=key, content=b"Replacement"
+        )
+    assert failed.status_code == 500
+    rows = client.get(
+        f"/courses/c1/assignments/{task['id']}/submissions", headers=teacher
+    ).json
+    assert rows == [first.json]
+    assert set(directory.iterdir()) == stored_files
+    assert client.get(first.json["downloadUrl"], headers=student).data == b"Bai lam"
+    with assessment_app.extensions["lms_store"]._connect() as conn:
+        assert (
+            conn.execute("SELECT count(*) AS n FROM submission_idempotency").fetchone()[
+                "n"
+            ]
+            == 1
+        )
+    retried = submit_file(client, student, task["id"], key=key, content=b"Replacement")
+    assert retried.status_code == 201
+    assert "Idempotency-Replayed" not in retried.headers
+
+
+def test_idempotency_retry_after_audit_failure(assessment_app, monkeypatch):
+    client = assessment_app.test_client()
+    teacher = auth(client, "an.gv@lms.test")
+    student = auth(client, "chi.sv@lms.test")
+    task = assignment(client, teacher)
+    key = str(uuid.uuid4())
+
+    def broken_audit(action):
+        raise OSError("DEMO: audit unavailable after commit")
+
+    with monkeypatch.context() as patch:
+        patch.setattr("app.api.assessments._audit", broken_audit)
+        failed = submit_file(client, student, task["id"], key=key)
+    assert failed.status_code == 500
+    url = f"/courses/c1/assignments/{task['id']}/submissions"
+    before = client.get(url, headers=teacher).json
+    assert len(before) == 1
+    stored_files = set(Path(assessment_app.config["SUBMISSION_UPLOAD_DIR"]).iterdir())
+    retried = submit_file(client, student, task["id"], key=key)
+    assert retried.status_code == 201
+    assert retried.json == before[0]
+    assert retried.headers["Idempotency-Replayed"] == "true"
+    assert client.get(url, headers=teacher).json == before
+    assert (
+        set(Path(assessment_app.config["SUBMISSION_UPLOAD_DIR"]).iterdir())
+        == stored_files
+    )
+
+
+def test_idempotency_course_deletion_cleans_keys(assessment_app):
+    client = assessment_app.test_client()
+    teacher = auth(client, "an.gv@lms.test")
+    student = auth(client, "chi.sv@lms.test")
+    admin = auth(client, "admin@lms.test")
+    task = assignment(client, teacher)
+    assert submit_file(client, student, task["id"]).status_code == 201
+    assert client.delete("/courses/c1", headers=admin).status_code == 200
+    with assessment_app.extensions["lms_store"]._connect() as conn:
+        assert (
+            conn.execute("SELECT count(*) AS n FROM submission_idempotency").fetchone()[
+                "n"
+            ]
+            == 0
+        )
